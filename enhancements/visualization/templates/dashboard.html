@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NornFlow NetOps - Monitoring Dashboard</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
+    <!-- D3.js -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <style>
+        .sidebar {
+            height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 250px;
+            z-index: 1000;
+            overflow-y: auto;
+        }
+        
+        .main-content {
+            margin-left: 250px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            min-height: 100vh;
+        }
+        
+        .metric-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            transition: transform 0.2s;
+        }
+        
+        .metric-card:hover {
+            transform: translateY(-2px);
+        }
+        
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .metric-label {
+            color: #6c757d;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        
+        .status-pending { background-color: #ffc107; }
+        .status-running { background-color: #17a2b8; }
+        .status-success { background-color: #28a745; }
+        .status-failed { background-color: #dc3545; }
+        .status-skipped { background-color: #6c757d; }
+        
+        .workflow-card {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .workflow-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+        }
+        
+        .execution-timeline {
+            height: 400px;
+            overflow-y: auto;
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+        }
+        
+        .timeline-item {
+            border-left: 3px solid #667eea;
+            padding-left: 15px;
+            margin-bottom: 20px;
+            position: relative;
+        }
+        
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -6px;
+            top: 5px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #667eea;
+        }
+        
+        .chart-container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .nav-link {
+            color: rgba(255,255,255,0.8) !important;
+            border-radius: 5px;
+            margin: 2px 0;
+        }
+        
+        .nav-link:hover, .nav-link.active {
+            background-color: rgba(255,255,255,0.1);
+            color: white !important;
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1001;
+        }
+        
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.3s;
+            }
+            
+            .sidebar.show {
+                transform: translateX(0);
+            }
+            
+            .main-content {
+                margin-left: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Connection Status -->
+    <div class="connection-status">
+        <span id="connection-indicator" class="badge bg-secondary">
+            <i class="fas fa-circle"></i> Connecting...
+        </span>
+    </div>
+
+    <!-- Sidebar -->
+    <nav class="sidebar">
+        <div class="p-3">
+            <h4 class="mb-4">
+                <i class="fas fa-network-wired"></i>
+                NornFlow NetOps
+            </h4>
+            
+            <ul class="nav nav-pills flex-column">
+                <li class="nav-item">
+                    <a class="nav-link active" href="#dashboard" data-tab="dashboard">
+                        <i class="fas fa-tachometer-alt"></i> Dashboard
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#workflows" data-tab="workflows">
+                        <i class="fas fa-project-diagram"></i> Workflows
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#executions" data-tab="executions">
+                        <i class="fas fa-play-circle"></i> Executions
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#analytics" data-tab="analytics">
+                        <i class="fas fa-chart-line"></i> Analytics
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#system" data-tab="system">
+                        <i class="fas fa-server"></i> System
+                    </a>
+                </li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Dashboard Tab -->
+        <div id="dashboard-tab" class="tab-content active">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2><i class="fas fa-tachometer-alt"></i> Dashboard Overview</h2>
+                <button class="btn btn-primary" onclick="refreshData()">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </div>
+
+            <!-- Metrics Cards -->
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="metric-card">
+                        <div class="metric-value" id="total-executions">0</div>
+                        <div class="metric-label">Total Executions</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="metric-card">
+                        <div class="metric-value" id="success-rate">0%</div>
+                        <div class="metric-label">Success Rate</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="metric-card">
+                        <div class="metric-value" id="avg-duration">0s</div>
+                        <div class="metric-label">Avg Duration</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="metric-card">
+                        <div class="metric-value" id="active-executions">0</div>
+                        <div class="metric-label">Active Executions</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Row -->
+            <div class="row mb-4">
+                <div class="col-md-8">
+                    <div class="chart-container">
+                        <h5>Execution Timeline</h5>
+                        <canvas id="execution-timeline-chart"></canvas>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="chart-container">
+                        <h5>Status Distribution</h5>
+                        <canvas id="status-distribution-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Activity -->
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="execution-timeline">
+                        <h5>Recent Executions</h5>
+                        <div id="recent-executions"></div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="execution-timeline">
+                        <h5>System Status</h5>
+                        <div id="system-status"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Workflows Tab -->
+        <div id="workflows-tab" class="tab-content">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2><i class="fas fa-project-diagram"></i> Available Workflows</h2>
+                <button class="btn btn-success" onclick="loadWorkflows()">
+                    <i class="fas fa-sync-alt"></i> Reload Workflows
+                </button>
+            </div>
+            <div id="workflows-list"></div>
+        </div>
+
+        <!-- Executions Tab -->
+        <div id="executions-tab" class="tab-content">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2><i class="fas fa-play-circle"></i> Workflow Executions</h2>
+                <div>
+                    <button class="btn btn-info" onclick="loadExecutions()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+            </div>
+            <div id="executions-list"></div>
+        </div>
+
+        <!-- Analytics Tab -->
+        <div id="analytics-tab" class="tab-content">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2><i class="fas fa-chart-line"></i> Performance Analytics</h2>
+            </div>
+            
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="chart-container">
+                        <h5>Task Performance</h5>
+                        <canvas id="task-performance-chart"></canvas>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="chart-container">
+                        <h5>Execution Trends</h5>
+                        <canvas id="execution-trends-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Tab -->
+        <div id="system-tab" class="tab-content">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2><i class="fas fa-server"></i> System Monitoring</h2>
+            </div>
+            
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="metric-card">
+                        <div class="metric-value" id="cpu-usage">0%</div>
+                        <div class="metric-label">CPU Usage</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="metric-card">
+                        <div class="metric-value" id="memory-usage">0%</div>
+                        <div class="metric-label">Memory Usage</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="metric-card">
+                        <div class="metric-value" id="disk-usage">0%</div>
+                        <div class="metric-label">Disk Usage</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="metric-card">
+                        <div class="metric-value" id="network-io">0 MB</div>
+                        <div class="metric-label">Network I/O</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="chart-container">
+                        <h5>System Resource Usage</h5>
+                        <canvas id="system-resources-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        // Global variables
+        let socket;
+        let charts = {};
+        let currentTab = 'dashboard';
+        
+        // Initialize application
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeSocketIO();
+            initializeCharts();
+            initializeNavigation();
+            loadInitialData();
+        });
+        
+        // Socket.IO initialization
+        function initializeSocketIO() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                updateConnectionStatus('connected');
+                console.log('Connected to monitoring server');
+            });
+            
+            socket.on('disconnect', function() {
+                updateConnectionStatus('disconnected');
+                console.log('Disconnected from monitoring server');
+            });
+            
+            socket.on('metrics_update', function(data) {
+                updateMetrics(data);
+            });
+            
+            socket.on('execution_started', function(data) {
+                addRecentExecution(data, 'started');
+                loadExecutions();
+            });
+            
+            socket.on('execution_completed', function(data) {
+                addRecentExecution(data, 'completed');
+                loadExecutions();
+            });
+            
+            socket.on('task_updated', function(data) {
+                updateTaskStatus(data);
+            });
+        }
+        
+        // Update connection status indicator
+        function updateConnectionStatus(status) {
+            const indicator = document.getElementById('connection-indicator');
+            if (status === 'connected') {
+                indicator.className = 'badge bg-success';
+                indicator.innerHTML = '<i class="fas fa-circle"></i> Connected';
+            } else {
+                indicator.className = 'badge bg-danger';
+                indicator.innerHTML = '<i class="fas fa-circle"></i> Disconnected';
+            }
+        }
+        
+        // Initialize charts
+        function initializeCharts() {
+            // Execution timeline chart
+            const timelineCtx = document.getElementById('execution-timeline-chart').getContext('2d');
+            charts.timeline = new Chart(timelineCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Executions',
+                        data: [],
+                        borderColor: '#667eea',
+                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+            
+            // Status distribution chart
+            const statusCtx = document.getElementById('status-distribution-chart').getContext('2d');
+            charts.status = new Chart(statusCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Success', 'Failed', 'Running', 'Pending'],
+                    datasets: [{
+                        data: [0, 0, 0, 0],
+                        backgroundColor: ['#28a745', '#dc3545', '#17a2b8', '#ffc107']
+                    }]
+                },
+                options: {
+                    responsive: true
+                }
+            });
+            
+            // Task performance chart
+            const taskCtx = document.getElementById('task-performance-chart').getContext('2d');
+            charts.taskPerformance = new Chart(taskCtx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Average Duration (s)',
+                        data: [],
+                        backgroundColor: '#667eea'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+            
+            // System resources chart
+            const systemCtx = document.getElementById('system-resources-chart').getContext('2d');
+            charts.systemResources = new Chart(systemCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: 'CPU %',
+                            data: [],
+                            borderColor: '#dc3545',
+                            backgroundColor: 'rgba(220, 53, 69, 0.1)'
+                        },
+                        {
+                            label: 'Memory %',
+                            data: [],
+                            borderColor: '#28a745',
+                            backgroundColor: 'rgba(40, 167, 69, 0.1)'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Initialize navigation
+        function initializeNavigation() {
+            document.querySelectorAll('[data-tab]').forEach(link => {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const tab = this.getAttribute('data-tab');
+                    switchTab(tab);
+                });
+            });
+        }
+        
+        // Switch between tabs
+        function switchTab(tab) {
+            // Update navigation
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+            
+            // Update content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+                content.style.display = 'none';
+            });
+            
+            const tabContent = document.getElementById(`${tab}-tab`);
+            if (tabContent) {
+                tabContent.classList.add('active');
+                tabContent.style.display = 'block';
+            }
+            
+            currentTab = tab;
+            
+            // Load tab-specific data
+            switch(tab) {
+                case 'workflows':
+                    loadWorkflows();
+                    break;
+                case 'executions':
+                    loadExecutions();
+                    break;
+                case 'analytics':
+                    loadAnalytics();
+                    break;
+                case 'system':
+                    requestMetrics();
+                    break;
+            }
+        }
+        
+        // Load initial data
+        function loadInitialData() {
+            loadMetrics();
+            loadWorkflows();
+            loadExecutions();
+        }
+        
+        // Load metrics
+        function loadMetrics() {
+            fetch('/api/metrics')
+                .then(response => response.json())
+                .then(data => updateMetrics(data))
+                .catch(error => console.error('Error loading metrics:', error));
+        }
+        
+        // Update metrics display
+        function updateMetrics(data) {
+            // Update metric cards
+            document.getElementById('total-executions').textContent = data.total_executions || 0;
+            
+            const successRate = data.total_executions > 0 ? 
+                ((data.successful_executions / data.total_executions) * 100).toFixed(1) : 0;
+            document.getElementById('success-rate').textContent = successRate + '%';
+            
+            document.getElementById('avg-duration').textContent = (data.average_duration || 0).toFixed(1) + 's';
+            
+            // Update system metrics if available
+            if (data.system) {
+                document.getElementById('cpu-usage').textContent = (data.system.cpu_percent || 0).toFixed(1) + '%';
+                document.getElementById('memory-usage').textContent = (data.system.memory_percent || 0).toFixed(1) + '%';
+                document.getElementById('disk-usage').textContent = (data.system.disk_percent || 0).toFixed(1) + '%';
+                
+                const networkIO = ((data.system.network_bytes_sent + data.system.network_bytes_recv) / (1024 * 1024)).toFixed(1);
+                document.getElementById('network-io').textContent = networkIO + ' MB';
+                
+                // Update system resources chart
+                updateSystemResourcesChart(data.system);
+            }
+            
+            // Update task performance chart
+            if (data.task_performance) {
+                updateTaskPerformanceChart(data.task_performance);
+            }
+        }
+        
+        // Update system resources chart
+        function updateSystemResourcesChart(systemData) {
+            const chart = charts.systemResources;
+            const now = new Date().toLocaleTimeString();
+            
+            chart.data.labels.push(now);
+            chart.data.datasets[0].data.push(systemData.cpu_percent || 0);
+            chart.data.datasets[1].data.push(systemData.memory_percent || 0);
+            
+            // Keep only last 20 data points
+            if (chart.data.labels.length > 20) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+                chart.data.datasets[1].data.shift();
+            }
+            
+            chart.update();
+        }
+        
+        // Update task performance chart
+        function updateTaskPerformanceChart(taskData) {
+            const chart = charts.taskPerformance;
+            const labels = Object.keys(taskData);
+            const durations = labels.map(task => taskData[task].average_duration || 0);
+            
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = durations;
+            chart.update();
+        }
+        
+        // Load workflows
+        function loadWorkflows() {
+            fetch('/api/workflows')
+                .then(response => response.json())
+                .then(data => displayWorkflows(data))
+                .catch(error => console.error('Error loading workflows:', error));
+        }
+        
+        // Display workflows
+        function displayWorkflows(workflows) {
+            const container = document.getElementById('workflows-list');
+            container.innerHTML = '';
+            
+            workflows.forEach(workflow => {
+                const card = document.createElement('div');
+                card.className = 'workflow-card';
+                card.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <h5>${workflow.name}</h5>
+                            <p class="text-muted">${workflow.description}</p>
+                            <small class="text-info">
+                                <i class="fas fa-tasks"></i> ${workflow.tasks} tasks
+                                <i class="fas fa-chart-line ms-2"></i> Complexity: ${workflow.complexity}
+                            </small>
+                        </div>
+                        <div>
+                            <button class="btn btn-primary btn-sm" onclick="visualizeWorkflow('${workflow.file}')">
+                                <i class="fas fa-eye"></i> Visualize
+                            </button>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+        
+        // Load executions
+        function loadExecutions() {
+            fetch('/api/executions')
+                .then(response => response.json())
+                .then(data => displayExecutions(data))
+                .catch(error => console.error('Error loading executions:', error));
+        }
+        
+        // Display executions
+        function displayExecutions(executions) {
+            const container = document.getElementById('executions-list');
+            container.innerHTML = '';
+            
+            executions.forEach(execution => {
+                const card = document.createElement('div');
+                card.className = 'workflow-card';
+                
+                const statusClass = `status-${execution.status}`;
+                const duration = execution.total_duration ? 
+                    `${execution.total_duration.toFixed(1)}s` : 'Running...';
+                
+                card.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <h6>
+                                <span class="status-indicator ${statusClass}"></span>
+                                ${execution.workflow_name}
+                            </h6>
+                            <small class="text-muted">
+                                ID: ${execution.execution_id}<br>
+                                User: ${execution.user || 'Unknown'}<br>
+                                Duration: ${duration}
+                            </small>
+                        </div>
+                        <div>
+                            <span class="badge bg-${getStatusColor(execution.status)}">${execution.status}</span>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+            
+            // Update recent executions
+            updateRecentExecutions(executions.slice(0, 5));
+        }
+        
+        // Get status color for badges
+        function getStatusColor(status) {
+            const colors = {
+                'pending': 'warning',
+                'running': 'info',
+                'success': 'success',
+                'failed': 'danger',
+                'skipped': 'secondary'
+            };
+            return colors[status] || 'secondary';
+        }
+        
+        // Update recent executions
+        function updateRecentExecutions(executions) {
+            const container = document.getElementById('recent-executions');
+            container.innerHTML = '';
+            
+            executions.forEach(execution => {
+                const item = document.createElement('div');
+                item.className = 'timeline-item';
+                
+                const time = execution.start_time ? 
+                    new Date(execution.start_time).toLocaleString() : 'Unknown';
+                
+                item.innerHTML = `
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <strong>${execution.workflow_name}</strong><br>
+                            <small class="text-muted">${time}</small>
+                        </div>
+                        <span class="badge bg-${getStatusColor(execution.status)}">${execution.status}</span>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+        }
+        
+        // Visualize workflow
+        function visualizeWorkflow(workflowFile) {
+            window.open(`/workflow/${encodeURIComponent(workflowFile)}`, '_blank');
+        }
+        
+        // Request metrics update
+        function requestMetrics() {
+            socket.emit('request_metrics');
+        }
+        
+        // Refresh data
+        function refreshData() {
+            loadMetrics();
+            if (currentTab === 'workflows') {
+                loadWorkflows();
+            } else if (currentTab === 'executions') {
+                loadExecutions();
+            }
+        }
+        
+        // Add recent execution
+        function addRecentExecution(data, type) {
+            const container = document.getElementById('recent-executions');
+            const item = document.createElement('div');
+            item.className = 'timeline-item';
+            
+            const time = new Date().toLocaleString();
+            const message = type === 'started' ? 'Execution started' : 'Execution completed';
+            
+            item.innerHTML = `
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <strong>${data.workflow_name}</strong><br>
+                        <small class="text-muted">${message} at ${time}</small>
+                    </div>
+                    <span class="badge bg-info">Live</span>
+                </div>
+            `;
+            
+            container.insertBefore(item, container.firstChild);
+            
+            // Keep only last 10 items
+            while (container.children.length > 10) {
+                container.removeChild(container.lastChild);
+            }
+        }
+        
+        // Update task status
+        function updateTaskStatus(data) {
+            console.log('Task updated:', data);
+            // This would update any open workflow visualizations
+        }
+        
+        // Load analytics
+        function loadAnalytics() {
+            // Load analytics-specific data
+            loadMetrics();
+        }
+        
+        // Initialize with dashboard tab
+        switchTab('dashboard');
+    </script>
+</body>
+</html>

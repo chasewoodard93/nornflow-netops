@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - NornFlow Web Interface{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="fas fa-tachometer-alt me-3"></i>
+                Dashboard
+            </h1>
+            <div class="text-muted">
+                Welcome back, <strong>{{ user.username }}</strong>!
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Statistics Cards -->
+<div class="row mb-4">
+    <div class="col-md-3 mb-3">
+        <div class="card bg-primary text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ workflows|length }}</h4>
+                        <p class="card-text">Available Workflows</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-project-diagram fa-2x opacity-75"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3 mb-3">
+        <div class="card bg-success text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ recent_executions|selectattr('status', 'equalto', 'completed')|list|length }}</h4>
+                        <p class="card-text">Successful Executions</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-check-circle fa-2x opacity-75"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3 mb-3">
+        <div class="card bg-warning text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ recent_executions|selectattr('status', 'equalto', 'running')|list|length }}</h4>
+                        <p class="card-text">Running Executions</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-spinner fa-2x opacity-75"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3 mb-3">
+        <div class="card bg-danger text-white">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title">{{ recent_executions|selectattr('status', 'in', ['failed', 'error'])|list|length }}</h4>
+                        <p class="card-text">Failed Executions</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-exclamation-triangle fa-2x opacity-75"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-bolt me-2"></i>
+                    Quick Actions
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <a href="{{ url_for('workflows') }}" class="btn btn-outline-primary w-100 p-3">
+                            <i class="fas fa-play fa-2x mb-2 d-block"></i>
+                            <strong>Execute Workflow</strong>
+                            <br>
+                            <small class="text-muted">Run network automation workflows</small>
+                        </a>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <a href="{{ url_for('history') }}" class="btn btn-outline-info w-100 p-3">
+                            <i class="fas fa-history fa-2x mb-2 d-block"></i>
+                            <strong>View History</strong>
+                            <br>
+                            <small class="text-muted">Check execution history and logs</small>
+                        </a>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <button class="btn btn-outline-secondary w-100 p-3" onclick="refreshDashboard()">
+                            <i class="fas fa-sync-alt fa-2x mb-2 d-block"></i>
+                            <strong>Refresh Data</strong>
+                            <br>
+                            <small class="text-muted">Update dashboard information</small>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Workflows -->
+<div class="row mb-4">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-project-diagram me-2"></i>
+                    Available Workflows
+                </h5>
+                <a href="{{ url_for('workflows') }}" class="btn btn-sm btn-outline-primary">
+                    View All
+                </a>
+            </div>
+            <div class="card-body">
+                {% if workflows %}
+                    <div class="row">
+                        {% for workflow in workflows[:6] %}
+                        <div class="col-md-6 mb-3">
+                            <div class="card workflow-card h-100">
+                                <div class="card-body">
+                                    <h6 class="card-title">
+                                        <i class="fas fa-cog me-2 text-primary"></i>
+                                        {{ workflow.name }}
+                                    </h6>
+                                    <p class="card-text text-muted small">
+                                        {{ workflow.description[:100] }}{% if workflow.description|length > 100 %}...{% endif %}
+                                    </p>
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <small class="text-muted">
+                                            <i class="fas fa-tasks me-1"></i>
+                                            {{ workflow.tasks }} tasks
+                                        </small>
+                                        <a href="{{ url_for('workflow_detail', workflow_file=workflow.file) }}" 
+                                           class="btn btn-sm btn-primary">
+                                            Execute
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="text-center py-4">
+                        <i class="fas fa-folder-open fa-3x text-muted mb-3"></i>
+                        <h5 class="text-muted">No Workflows Found</h5>
+                        <p class="text-muted">No NornFlow workflows are available in the workflows directory.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <!-- Recent Executions -->
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-clock me-2"></i>
+                    Recent Executions
+                </h5>
+                <a href="{{ url_for('history') }}" class="btn btn-sm btn-outline-info">
+                    View All
+                </a>
+            </div>
+            <div class="card-body">
+                {% if recent_executions %}
+                    {% for execution in recent_executions %}
+                    <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom">
+                        <div class="flex-grow-1">
+                            <div class="fw-bold">{{ execution.workflow_name }}</div>
+                            <small class="text-muted">
+                                <i class="fas fa-clock me-1"></i>
+                                {{ execution.start_time|replace('T', ' ')[:16] }}
+                            </small>
+                        </div>
+                        <div class="text-end">
+                            <div class="mb-1">
+                                {% if execution.status == 'running' %}
+                                    <span class="execution-status status-running">RUNNING</span>
+                                {% elif execution.status == 'completed' %}
+                                    <span class="execution-status status-completed">COMPLETED</span>
+                                {% elif execution.status == 'failed' %}
+                                    <span class="execution-status status-failed">FAILED</span>
+                                {% else %}
+                                    <span class="execution-status status-error">ERROR</span>
+                                {% endif %}
+                            </div>
+                            <a href="{{ url_for('execution_detail', execution_id=execution.execution_id) }}" 
+                               class="btn btn-xs btn-outline-secondary">
+                                <i class="fas fa-eye"></i>
+                            </a>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="text-center py-3">
+                        <i class="fas fa-history fa-2x text-muted mb-2"></i>
+                        <p class="text-muted mb-0">No recent executions</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- System Status -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-server me-2"></i>
+                    System Status
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3 text-center">
+                        <div class="mb-2">
+                            <i class="fas fa-circle text-success fa-2x"></i>
+                        </div>
+                        <h6>NornFlow Engine</h6>
+                        <small class="text-muted">Online</small>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <div class="mb-2">
+                            <i class="fas fa-circle text-success fa-2x"></i>
+                        </div>
+                        <h6>Web Interface</h6>
+                        <small class="text-muted">Running</small>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <div class="mb-2">
+                            <i class="fas fa-circle text-success fa-2x"></i>
+                        </div>
+                        <h6>Database</h6>
+                        <small class="text-muted">Connected</small>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <div class="mb-2">
+                            <i class="fas fa-circle text-success fa-2x"></i>
+                        </div>
+                        <h6>Real-time Updates</h6>
+                        <small class="text-muted">Active</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    function refreshDashboard() {
+        // Show loading state
+        const refreshBtn = document.querySelector('button[onclick="refreshDashboard()"]');
+        const originalContent = refreshBtn.innerHTML;
+        refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin fa-2x mb-2 d-block"></i><strong>Refreshing...</strong>';
+        refreshBtn.disabled = true;
+        
+        // Reload the page after a short delay
+        setTimeout(() => {
+            window.location.reload();
+        }, 1000);
+    }
+    
+    // Auto-refresh every 30 seconds for running executions
+    setInterval(() => {
+        const runningExecutions = document.querySelectorAll('.status-running').length;
+        if (runningExecutions > 0) {
+            // Only refresh if there are running executions
+            fetch('/api/executions')
+                .then(response => response.json())
+                .then(data => {
+                    // Update execution statuses without full page reload
+                    console.log('Updated execution data:', data);
+                })
+                .catch(error => console.error('Error updating executions:', error));
+        }
+    }, 30000);
+    
+    // Socket.IO connection for real-time updates
+    socket.on('connect', function() {
+        console.log('Dashboard connected to real-time updates');
+    });
+    
+    // Handle real-time execution updates
+    socket.on('execution_completed', function(data) {
+        // Update the execution status in the recent executions list
+        const executionElements = document.querySelectorAll('[data-execution-id="' + data.execution_id + '"]');
+        executionElements.forEach(element => {
+            const statusElement = element.querySelector('.execution-status');
+            if (statusElement) {
+                statusElement.className = 'execution-status ' + 
+                    (data.return_code === 0 ? 'status-completed' : 'status-failed');
+                statusElement.textContent = data.return_code === 0 ? 'COMPLETED' : 'FAILED';
+            }
+        });
+        
+        // Show notification
+        showNotification(
+            data.return_code === 0 ? 'success' : 'danger',
+            `Execution ${data.execution_id} ${data.return_code === 0 ? 'completed successfully' : 'failed'}`
+        );
+    });
+    
+    function showNotification(type, message) {
+        const alertDiv = document.createElement('div');
+        alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+        alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+        alertDiv.innerHTML = `
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        document.body.appendChild(alertDiv);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            if (alertDiv.parentNode) {
+                alertDiv.parentNode.removeChild(alertDiv);
+            }
+        }, 5000);
+    }
+</script>
+{% endblock %}
