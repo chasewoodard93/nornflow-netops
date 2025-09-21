@@ -1,0 +1,85 @@
+# NornFlow Inventory Configuration for AWX
+# This inventory will be populated from AWX inventory or NetBox
+
+{% if awx_inventory_hosts is defined %}
+# Hosts from AWX inventory
+{% for host in awx_inventory_hosts %}
+{{ host.name }}:
+  hostname: {{ host.hostname | default(host.name) }}
+  platform: {{ host.platform | default('cisco_ios') }}
+  port: {{ host.port | default(22) }}
+  username: {{ host.username | default('admin') }}
+  password: {{ host.password | default('') }}
+  groups: {{ host.groups | default(['all']) | to_json }}
+  data:
+    site: {{ host.site | default('unknown') }}
+    role: {{ host.role | default('network_device') }}
+    vendor: {{ host.vendor | default('cisco') }}
+    model: {{ host.model | default('unknown') }}
+    os_version: {{ host.os_version | default('unknown') }}
+    {% if host.netbox_data is defined %}
+    netbox: {{ host.netbox_data | to_json }}
+    {% endif %}
+    awx_host_id: {{ host.id | default('') }}
+
+{% endfor %}
+{% else %}
+# Default localhost for testing
+localhost:
+  hostname: 127.0.0.1
+  platform: linux
+  groups: [all, test]
+  data:
+    site: local
+    role: test_host
+    vendor: local
+    model: localhost
+{% endif %}
+
+# Group definitions
+groups:
+  all:
+    data:
+      domain: default
+      
+  routers:
+    data:
+      device_type: router
+      
+  switches:
+    data:
+      device_type: switch
+      
+  firewalls:
+    data:
+      device_type: firewall
+      
+  cisco:
+    data:
+      vendor: cisco
+      
+  juniper:
+    data:
+      vendor: juniper
+      
+  arista:
+    data:
+      vendor: arista
+
+# Default connection parameters
+defaults:
+  username: "{{ default_username | default('admin') }}"
+  password: "{{ default_password | default('') }}"
+  platform: "{{ default_platform | default('cisco_ios') }}"
+  port: {{ default_port | default(22) }}
+  connection_options:
+    netmiko:
+      extras:
+        timeout: {{ connection_timeout | default(30) }}
+        session_timeout: {{ session_timeout | default(60) }}
+        auth_timeout: {{ auth_timeout | default(30) }}
+        banner_timeout: {{ banner_timeout | default(15) }}
+        read_timeout_override: {{ read_timeout | default(30) }}
+        global_delay_factor: {{ delay_factor | default(1) }}
+        use_keys: {{ use_ssh_keys | default(false) }}
+        key_file: "{{ ssh_key_file | default('') }}"

@@ -1,0 +1,49 @@
+# NornFlow Web Interface Requirements
+# Flask-based web interface for NornFlow workflows
+
+# Core Flask framework
+Flask==2.3.3
+Werkzeug==2.3.7
+
+# Real-time communication
+Flask-SocketIO==5.3.6
+python-socketio==5.8.0
+
+# Database
+sqlite3  # Built into Python
+
+# YAML processing
+PyYAML==6.0.1
+
+# HTTP requests
+requests==2.31.0
+
+# Development and testing
+pytest==7.4.2
+pytest-flask==1.2.0
+pytest-socketio==0.2.0
+
+# Optional: Production WSGI server
+gunicorn==21.2.0
+
+# Optional: Redis for session storage in production
+redis==4.6.0
+Flask-Session==0.5.0
+
+# Optional: Authentication extensions
+Flask-Login==0.6.3
+Flask-WTF==1.1.1
+WTForms==3.0.1
+
+# Optional: Database migrations
+Flask-Migrate==4.0.5
+Flask-SQLAlchemy==3.0.5
+
+# Optional: API documentation
+Flask-RESTX==1.1.0
+
+# Optional: Rate limiting
+Flask-Limiter==3.5.0
+
+# Optional: CORS support
+Flask-CORS==4.0.0

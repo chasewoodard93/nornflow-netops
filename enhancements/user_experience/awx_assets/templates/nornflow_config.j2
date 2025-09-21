@@ -1,0 +1,111 @@
+# NornFlow Configuration for AWX Execution
+# Generated automatically by AWX integration
+
+# Core NornFlow settings
+core:
+  num_workers: {{ nornflow_workers | default(10) }}
+  raise_on_error: false
+
+# Inventory configuration
+inventory:
+  plugin: SimpleInventory
+  options:
+    host_file: "{{ nornflow_config_path }}/inventory.yaml"
+
+# Logging configuration
+logging:
+  enabled: true
+  level: "{{ 'DEBUG' if nornflow_verbosity|int >= 2 else 'INFO' }}"
+  loggers:
+    nornir:
+      level: "{{ 'DEBUG' if nornflow_verbosity|int >= 3 else 'INFO' }}"
+    nornflow:
+      level: "{{ 'DEBUG' if nornflow_verbosity|int >= 2 else 'INFO' }}"
+
+# Runner configuration
+runner:
+  plugin: threaded
+  options:
+    num_workers: {{ nornflow_workers | default(10) }}
+
+# SSH configuration for device connections
+ssh:
+  config_file: "~/.ssh/config"
+
+# Connection settings
+connections:
+  netmiko:
+    platform: "{{ default_platform | default('cisco_ios') }}"
+    extras:
+      timeout: {{ connection_timeout | default(30) }}
+      session_timeout: {{ session_timeout | default(60) }}
+      auth_timeout: {{ auth_timeout | default(30) }}
+      banner_timeout: {{ banner_timeout | default(15) }}
+      read_timeout_override: {{ read_timeout | default(30) }}
+
+# User data directory
+user_data:
+  workflows: "{{ nornflow_workflow_path }}"
+  tasks: "tasks"
+  filters: "filters"
+  processors: "processors"
+
+# Variable precedence
+variables:
+  precedence:
+    - runtime
+    - cli
+    - workflow
+    - domain
+    - global
+    - environment
+
+# AWX-specific settings
+awx:
+  execution_mode: true
+  job_id: "{{ tower_job_id | default('manual') }}"
+  user: "{{ tower_user_name | default(ansible_user_id) }}"
+  timestamp: "{{ ansible_date_time.iso8601 }}"
+  
+# Integration settings (populated from AWX credentials)
+integrations:
+  netbox:
+    enabled: {{ 'true' if netbox_token is defined and netbox_token else 'false' }}
+    url: "{{ netbox_url | default('') }}"
+    token: "{{ netbox_token | default('') }}"
+    ssl_verify: {{ netbox_ssl_verify | default(true) }}
+  
+  git:
+    enabled: true
+    repo_path: "/tmp/nornflow-execution"
+    author_name: "AWX NornFlow"
+    author_email: "nornflow@awx.local"
+  
+  grafana:
+    enabled: {{ 'true' if grafana_api_key is defined and grafana_api_key else 'false' }}
+    url: "{{ grafana_url | default('') }}"
+    api_key: "{{ grafana_api_key | default('') }}"
+  
+  prometheus:
+    enabled: {{ 'true' if prometheus_url is defined and prometheus_url else 'false' }}
+    url: "{{ prometheus_url | default('') }}"
+    pushgateway_url: "{{ prometheus_pushgateway_url | default('') }}"
+  
+  servicenow:
+    enabled: {{ 'true' if servicenow_user is defined and servicenow_user else 'false' }}
+    instance_url: "{{ servicenow_url | default('') }}"
+    username: "{{ servicenow_user | default('') }}"
+    password: "{{ servicenow_pass | default('') }}"
+  
+  jira:
+    enabled: {{ 'true' if jira_user is defined and jira_user else 'false' }}
+    server_url: "{{ jira_url | default('') }}"
+    username: "{{ jira_user | default('') }}"
+    api_token: "{{ jira_token | default('') }}"
+  
+  infoblox:
+    enabled: {{ 'true' if infoblox_user is defined and infoblox_user else 'false' }}
+    url: "{{ infoblox_url | default('') }}"
+    username: "{{ infoblox_user | default('') }}"
+    password: "{{ infoblox_pass | default('') }}"
+    wapi_version: "{{ infoblox_wapi_version | default('v2.12') }}"

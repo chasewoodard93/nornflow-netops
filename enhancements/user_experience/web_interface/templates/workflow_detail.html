@@ -1,0 +1,440 @@
+{% extends "base.html" %}
+
+{% block title %}{{ workflow.name }} - NornFlow Web Interface{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('workflows') }}">Workflows</a></li>
+                <li class="breadcrumb-item active">{{ workflow.name }}</li>
+            </ol>
+        </nav>
+        
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>
+                <i class="fas fa-cog me-3"></i>
+                {{ workflow.name }}
+            </h1>
+            <div>
+                <button class="btn btn-outline-secondary me-2" onclick="showWorkflowSource()">
+                    <i class="fas fa-code me-1"></i>
+                    View Source
+                </button>
+                <a href="{{ url_for('workflows') }}" class="btn btn-outline-primary">
+                    <i class="fas fa-arrow-left me-1"></i>
+                    Back to Workflows
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Workflow Information -->
+<div class="row mb-4">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-info-circle me-2"></i>
+                    Workflow Information
+                </h5>
+            </div>
+            <div class="card-body">
+                <p class="card-text">{{ workflow.description }}</p>
+                <div class="row">
+                    <div class="col-md-4">
+                        <strong>File:</strong> {{ workflow.file }}
+                    </div>
+                    <div class="col-md-4">
+                        <strong>Tasks:</strong> {{ workflow.tasks|length }}
+                    </div>
+                    <div class="col-md-4">
+                        <strong>Variables:</strong> {{ workflow.variables|length }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-play me-2"></i>
+                    Quick Execute
+                </h5>
+            </div>
+            <div class="card-body text-center">
+                <button class="btn btn-success btn-lg mb-2" onclick="executeWorkflow(true)">
+                    <i class="fas fa-play me-2"></i>
+                    Dry Run
+                </button>
+                <br>
+                <button class="btn btn-danger" onclick="executeWorkflow(false)">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    Live Execute
+                </button>
+                <p class="text-muted mt-2 small">
+                    Dry run is recommended for testing
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Execution Form -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-sliders-h me-2"></i>
+                    Execution Parameters
+                </h5>
+            </div>
+            <div class="card-body">
+                <form id="execution-form">
+                    <div class="row">
+                        <!-- Execution Options -->
+                        <div class="col-lg-6">
+                            <h6 class="mb-3">Execution Options</h6>
+                            
+                            <div class="mb-3">
+                                <label for="dry_run" class="form-label">Execution Mode</label>
+                                <select class="form-select" id="dry_run" name="dry_run">
+                                    <option value="true" selected>Dry Run (Safe Testing)</option>
+                                    <option value="false">Live Execution (Make Changes)</option>
+                                </select>
+                                <div class="form-text">Dry run mode shows what would be done without making actual changes.</div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="verbosity" class="form-label">Verbosity Level</label>
+                                <select class="form-select" id="verbosity" name="verbosity">
+                                    <option value="0">Minimal Output</option>
+                                    <option value="1" selected>Normal Output</option>
+                                    <option value="2">Verbose Output</option>
+                                    <option value="3">Debug Output</option>
+                                </select>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="limit" class="form-label">Device Limit</label>
+                                <input type="text" class="form-control" id="limit" name="limit" 
+                                       placeholder="e.g., router1,switch2 or leave empty for all devices">
+                                <div class="form-text">Comma-separated list of devices to target, or leave empty for all.</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Workflow Variables -->
+                        <div class="col-lg-6">
+                            <h6 class="mb-3">Workflow Variables</h6>
+                            
+                            {% if workflow.variables %}
+                                {% for var_name, var_value in workflow.variables.items() %}
+                                <div class="mb-3">
+                                    <label for="var_{{ var_name }}" class="form-label">
+                                        {{ var_name.replace('_', ' ').title() }}
+                                    </label>
+                                    
+                                    {% if var_value is boolean %}
+                                        <select class="form-select" id="var_{{ var_name }}" name="var_{{ var_name }}">
+                                            <option value="true" {% if var_value %}selected{% endif %}>True</option>
+                                            <option value="false" {% if not var_value %}selected{% endif %}>False</option>
+                                        </select>
+                                    {% elif var_value is number %}
+                                        <input type="number" class="form-control" id="var_{{ var_name }}" 
+                                               name="var_{{ var_name }}" value="{{ var_value }}">
+                                    {% elif var_value is iterable and var_value is not string %}
+                                        <select class="form-select" id="var_{{ var_name }}" name="var_{{ var_name }}">
+                                            {% for option in var_value %}
+                                            <option value="{{ option }}">{{ option }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    {% else %}
+                                        {% if 'password' in var_name.lower() or 'secret' in var_name.lower() or 'token' in var_name.lower() %}
+                                            <input type="password" class="form-control" id="var_{{ var_name }}" 
+                                                   name="var_{{ var_name }}" value="{{ var_value if var_value != '' else '' }}">
+                                        {% else %}
+                                            <input type="text" class="form-control" id="var_{{ var_name }}" 
+                                                   name="var_{{ var_name }}" value="{{ var_value }}">
+                                        {% endif %}
+                                    {% endif %}
+                                    
+                                    <div class="form-text">Default: {{ var_value }}</div>
+                                </div>
+                                {% endfor %}
+                            {% else %}
+                                <div class="text-muted">
+                                    <i class="fas fa-info-circle me-2"></i>
+                                    This workflow has no configurable variables.
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    
+                    <hr>
+                    
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="confirm_execution">
+                            <label class="form-check-label" for="confirm_execution">
+                                I understand the impact of this workflow execution
+                            </label>
+                        </div>
+                        
+                        <div>
+                            <button type="button" class="btn btn-success me-2" onclick="submitExecution(true)">
+                                <i class="fas fa-play me-1"></i>
+                                Execute Dry Run
+                            </button>
+                            <button type="button" class="btn btn-danger" onclick="submitExecution(false)">
+                                <i class="fas fa-exclamation-triangle me-1"></i>
+                                Execute Live
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Workflow Tasks -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-tasks me-2"></i>
+                    Workflow Tasks ({{ workflow.tasks|length }})
+                </h5>
+            </div>
+            <div class="card-body">
+                {% if workflow.tasks %}
+                    <div class="list-group">
+                        {% for task in workflow.tasks %}
+                        <div class="list-group-item">
+                            <div class="d-flex w-100 justify-content-between">
+                                <h6 class="mb-1">
+                                    <i class="fas fa-cog me-2 text-primary"></i>
+                                    {{ task.name if task.name else task.task }}
+                                </h6>
+                                <small class="text-muted">{{ loop.index }}</small>
+                            </div>
+                            <p class="mb-1">
+                                <strong>Task:</strong> {{ task.task }}
+                                {% if task.when %}
+                                <br><strong>Condition:</strong> {{ task.when }}
+                                {% endif %}
+                            </p>
+                            {% if task.vars %}
+                            <small class="text-muted">
+                                <strong>Variables:</strong> {{ task.vars.keys()|join(', ') }}
+                            </small>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="text-center py-4">
+                        <i class="fas fa-tasks fa-3x text-muted mb-3"></i>
+                        <h5 class="text-muted">No Tasks Defined</h5>
+                        <p class="text-muted">This workflow doesn't have any tasks defined.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Workflow Source Modal -->
+<div class="modal fade" id="sourceModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-code me-2"></i>
+                    Workflow Source: {{ workflow.file }}
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <pre><code class="language-yaml">{{ workflow.raw_content }}</code></pre>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Execution Modal -->
+<div class="modal fade" id="executionModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-play me-2"></i>
+                    Workflow Execution
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="execution-status" class="mb-3">
+                    <span class="execution-status status-running">STARTING</span>
+                </div>
+                <div class="output-terminal" id="execution-output">
+                    Initializing workflow execution...\n
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a id="execution-detail-link" href="#" class="btn btn-primary" style="display: none;">
+                    View Full Details
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let currentExecutionId = null;
+    
+    function showWorkflowSource() {
+        const modal = new bootstrap.Modal(document.getElementById('sourceModal'));
+        modal.show();
+    }
+    
+    function executeWorkflow(dryRun) {
+        document.getElementById('dry_run').value = dryRun.toString();
+        submitExecution(dryRun);
+    }
+    
+    function submitExecution(dryRun) {
+        const confirmCheckbox = document.getElementById('confirm_execution');
+        
+        if (!dryRun && !confirmCheckbox.checked) {
+            alert('Please confirm that you understand the impact of this workflow execution.');
+            return;
+        }
+        
+        // Collect form data
+        const formData = new FormData(document.getElementById('execution-form'));
+        const variables = {};
+        
+        for (let [key, value] of formData.entries()) {
+            if (key.startsWith('var_')) {
+                variables[key.substring(4)] = value;
+            } else {
+                variables[key] = value;
+            }
+        }
+        
+        // Override dry_run if specified
+        variables.dry_run = dryRun.toString();
+        
+        // Show execution modal
+        const modal = new bootstrap.Modal(document.getElementById('executionModal'));
+        modal.show();
+        
+        // Reset output
+        document.getElementById('execution-output').innerHTML = 'Initializing workflow execution...\n';
+        document.getElementById('execution-status').innerHTML = '<span class="execution-status status-running">STARTING</span>';
+        
+        // Submit execution
+        fetch('/execute', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                workflow_file: '{{ workflow.file }}',
+                variables: variables,
+                dry_run: dryRun
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                currentExecutionId = data.execution_id;
+                
+                // Join execution room for real-time updates
+                socket.emit('join_execution', {execution_id: currentExecutionId});
+                
+                // Update status
+                document.getElementById('execution-status').innerHTML = 
+                    '<span class="execution-status status-running">RUNNING</span>';
+                
+                // Set up detail link
+                const detailLink = document.getElementById('execution-detail-link');
+                detailLink.href = `/execution/${currentExecutionId}`;
+                detailLink.style.display = 'inline-block';
+            } else {
+                document.getElementById('execution-output').innerHTML += 
+                    `ERROR: ${data.message}\n`;
+                document.getElementById('execution-status').innerHTML = 
+                    '<span class="execution-status status-error">ERROR</span>';
+            }
+        })
+        .catch(error => {
+            console.error('Execution error:', error);
+            document.getElementById('execution-output').innerHTML += 
+                `ERROR: ${error.message}\n`;
+            document.getElementById('execution-status').innerHTML = 
+                '<span class="execution-status status-error">ERROR</span>';
+        });
+    }
+    
+    // Socket.IO event handlers for real-time execution updates
+    socket.on('execution_output', function(data) {
+        if (data.execution_id === currentExecutionId) {
+            const outputElement = document.getElementById('execution-output');
+            outputElement.innerHTML += data.line + '\n';
+            outputElement.scrollTop = outputElement.scrollHeight;
+        }
+    });
+    
+    socket.on('execution_completed', function(data) {
+        if (data.execution_id === currentExecutionId) {
+            const statusElement = document.getElementById('execution-status');
+            statusElement.innerHTML = data.return_code === 0 ? 
+                '<span class="execution-status status-completed">COMPLETED</span>' :
+                '<span class="execution-status status-failed">FAILED</span>';
+            
+            const outputElement = document.getElementById('execution-output');
+            outputElement.innerHTML += `\n--- Execution completed with return code: ${data.return_code} ---\n`;
+            outputElement.innerHTML += `--- Duration: ${data.duration} ---\n`;
+            outputElement.scrollTop = outputElement.scrollHeight;
+        }
+    });
+    
+    socket.on('execution_error', function(data) {
+        if (data.execution_id === currentExecutionId) {
+            const statusElement = document.getElementById('execution-status');
+            statusElement.innerHTML = '<span class="execution-status status-error">ERROR</span>';
+            
+            const outputElement = document.getElementById('execution-output');
+            outputElement.innerHTML += `\nERROR: ${data.error}\n`;
+            outputElement.scrollTop = outputElement.scrollHeight;
+        }
+    });
+    
+    // Form validation
+    document.getElementById('execution-form').addEventListener('change', function() {
+        const dryRun = document.getElementById('dry_run').value === 'true';
+        const confirmCheckbox = document.getElementById('confirm_execution');
+        
+        // Show/hide confirmation based on execution mode
+        confirmCheckbox.parentElement.style.display = dryRun ? 'none' : 'block';
+    });
+    
+    // Initialize form state
+    document.getElementById('execution-form').dispatchEvent(new Event('change'));
+</script>
+{% endblock %}

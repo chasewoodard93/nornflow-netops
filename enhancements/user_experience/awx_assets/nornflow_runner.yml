@@ -1,0 +1,212 @@
+---
+# Ansible playbook for running NornFlow workflows in AWX
+# This playbook serves as the bridge between AWX and NornFlow execution
+
+- name: Execute NornFlow Workflow
+  hosts: localhost
+  gather_facts: false
+  vars:
+    # Default values - can be overridden by AWX survey
+    nornflow_dry_run: "true"
+    nornflow_verbosity: "1"
+    nornflow_limit: ""
+    nornflow_workflow: ""
+    nornflow_workflow_path: "workflows"
+    nornflow_git_repo: ""
+    
+    # NornFlow execution settings
+    nornflow_venv_path: "/opt/nornflow/venv"
+    nornflow_config_path: "/opt/nornflow/config"
+    nornflow_logs_path: "/opt/nornflow/logs"
+    
+  tasks:
+    - name: Validate required variables
+      fail:
+        msg: "Required variable {{ item }} is not defined"
+      when: vars[item] is undefined or vars[item] == ""
+      loop:
+        - nornflow_workflow
+        - nornflow_git_repo
+      tags: [validation]
+    
+    - name: Create NornFlow directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ nornflow_config_path }}"
+        - "{{ nornflow_logs_path }}"
+        - "/tmp/nornflow-execution"
+      tags: [setup]
+    
+    - name: Clone/Update NornFlow repository
+      git:
+        repo: "{{ nornflow_git_repo }}"
+        dest: "/tmp/nornflow-execution"
+        version: "{{ nornflow_git_branch | default('main') }}"
+        force: yes
+        depth: 1
+      tags: [setup]
+    
+    - name: Check if workflow file exists
+      stat:
+        path: "/tmp/nornflow-execution/{{ nornflow_workflow_path }}/{{ nornflow_workflow }}"
+      register: workflow_file
+      tags: [validation]
+    
+    - name: Fail if workflow file not found
+      fail:
+        msg: "Workflow file not found: {{ nornflow_workflow_path }}/{{ nornflow_workflow }}"
+      when: not workflow_file.stat.exists
+      tags: [validation]
+    
+    - name: Generate NornFlow configuration
+      template:
+        src: nornflow_config.j2
+        dest: "{{ nornflow_config_path }}/nornflow.yaml"
+        mode: '0644'
+      tags: [config]
+    
+    - name: Generate inventory configuration
+      template:
+        src: inventory_config.j2
+        dest: "{{ nornflow_config_path }}/inventory.yaml"
+        mode: '0644'
+      tags: [config]
+    
+    - name: Set up Python virtual environment
+      pip:
+        name:
+          - nornflow
+          - netmiko
+          - requests
+          - jinja2
+          - pyyaml
+        virtualenv: "{{ nornflow_venv_path }}"
+        virtualenv_python: python3
+      tags: [setup]
+    
+    - name: Install NornFlow enhancements
+      pip:
+        name: "/tmp/nornflow-execution/enhancements"
+        virtualenv: "{{ nornflow_venv_path }}"
+        editable: yes
+      tags: [setup]
+    
+    - name: Prepare NornFlow command
+      set_fact:
+        nornflow_cmd: >-
+          {{ nornflow_venv_path }}/bin/nornflow run {{ nornflow_workflow | regex_replace('\.ya?ml$', '') }}
+          --config {{ nornflow_config_path }}/nornflow.yaml
+          {% if nornflow_dry_run == "true" %}--dry-run{% endif %}
+          {% if nornflow_limit %}--limit "{{ nornflow_limit }}"{% endif %}
+          {% if nornflow_verbosity %}--verbosity {{ nornflow_verbosity }}{% endif %}
+          --log-file {{ nornflow_logs_path }}/{{ ansible_date_time.epoch }}-{{ nornflow_workflow }}.log
+      tags: [execution]
+    
+    - name: Display execution command
+      debug:
+        msg: "Executing: {{ nornflow_cmd }}"
+      tags: [execution]
+    
+    - name: Execute NornFlow workflow
+      shell: "{{ nornflow_cmd }}"
+      args:
+        chdir: "/tmp/nornflow-execution"
+      environment:
+        PYTHONPATH: "/tmp/nornflow-execution:/tmp/nornflow-execution/enhancements"
+        # Pass through AWX survey variables as environment variables
+        NETBOX_TOKEN: "{{ netbox_token | default('') }}"
+        GRAFANA_API_KEY: "{{ grafana_api_key | default('') }}"
+        PROMETHEUS_URL: "{{ prometheus_url | default('') }}"
+        SERVICENOW_USER: "{{ servicenow_user | default('') }}"
+        SERVICENOW_PASS: "{{ servicenow_pass | default('') }}"
+        JIRA_USER: "{{ jira_user | default('') }}"
+        JIRA_TOKEN: "{{ jira_token | default('') }}"
+        INFOBLOX_USER: "{{ infoblox_user | default('') }}"
+        INFOBLOX_PASS: "{{ infoblox_pass | default('') }}"
+      register: nornflow_result
+      failed_when: false
+      tags: [execution]
+    
+    - name: Display NornFlow output
+      debug:
+        var: nornflow_result.stdout_lines
+      when: nornflow_result.stdout_lines is defined
+      tags: [output]
+    
+    - name: Display NornFlow errors
+      debug:
+        var: nornflow_result.stderr_lines
+      when: nornflow_result.stderr_lines is defined and nornflow_result.stderr_lines | length > 0
+      tags: [output]
+    
+    - name: Parse NornFlow results
+      set_fact:
+        nornflow_summary: "{{ nornflow_result.stdout | regex_search('SUMMARY:.*', multiline=True) | default('No summary available') }}"
+        nornflow_failed_hosts: "{{ nornflow_result.stdout | regex_findall('FAILED: (.+)', multiline=True) }}"
+        nornflow_successful_hosts: "{{ nornflow_result.stdout | regex_findall('SUCCESS: (.+)', multiline=True) }}"
+      when: nornflow_result.stdout is defined
+      tags: [results]
+    
+    - name: Create execution report
+      template:
+        src: execution_report.j2
+        dest: "{{ nornflow_logs_path }}/{{ ansible_date_time.epoch }}-{{ nornflow_workflow }}-report.json"
+        mode: '0644'
+      vars:
+        execution_timestamp: "{{ ansible_date_time.iso8601 }}"
+        execution_user: "{{ tower_user_name | default(ansible_user_id) }}"
+        execution_job_id: "{{ tower_job_id | default('manual') }}"
+      tags: [reporting]
+    
+    - name: Upload results to external systems (if configured)
+      include_tasks: upload_results.yml
+      when: 
+        - upload_results | default(false) | bool
+        - nornflow_result.rc is defined
+      tags: [upload]
+    
+    - name: Fail if NornFlow execution failed
+      fail:
+        msg: |
+          NornFlow workflow execution failed!
+          Return code: {{ nornflow_result.rc }}
+          Error output: {{ nornflow_result.stderr }}
+      when: 
+        - nornflow_result.rc is defined
+        - nornflow_result.rc != 0
+        - not (nornflow_dry_run == "true")  # Don't fail on dry-run errors
+      tags: [validation]
+    
+    - name: Success message
+      debug:
+        msg: |
+          NornFlow workflow '{{ nornflow_workflow }}' completed successfully!
+          {% if nornflow_dry_run == "true" %}
+          This was a DRY RUN - no actual changes were made.
+          {% endif %}
+          Summary: {{ nornflow_summary }}
+          Successful hosts: {{ nornflow_successful_hosts | length }}
+          Failed hosts: {{ nornflow_failed_hosts | length }}
+      tags: [results]
+
+# Additional tasks for cleanup and notification
+- name: Cleanup and Notification
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Clean up temporary files
+      file:
+        path: "/tmp/nornflow-execution"
+        state: absent
+      when: cleanup_temp_files | default(true) | bool
+      tags: [cleanup]
+    
+    - name: Send notification (if configured)
+      include_tasks: send_notification.yml
+      when: 
+        - send_notifications | default(false) | bool
+        - notification_config is defined
+      tags: [notification]

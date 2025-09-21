@@ -1,0 +1,153 @@
+# NornFlow Integration Test Configuration
+# 
+# This file provides configuration templates for integration testing
+# with real external systems. Copy this file and customize for your environment.
+#
+# Environment variables can be used with ${VAR_NAME} syntax.
+
+# NetBox IPAM/DCIM Integration
+netbox:
+  enabled: false  # Set to true to enable NetBox integration testing
+  url: "${TEST_NETBOX_URL}"  # e.g., https://netbox.company.com
+  token: "${TEST_NETBOX_TOKEN}"  # NetBox API token
+  ssl_verify: true
+  timeout: 30
+  
+  # Test data configuration
+  test_data:
+    site_name: "test-site"
+    device_role: "test-role"
+    device_type: "test-device-type"
+    test_prefix: "192.168.100.0/24"
+
+# Git Version Control Integration
+git:
+  enabled: false  # Set to true to enable Git integration testing
+  repo_path: "${TEST_GIT_REPO_PATH}"  # e.g., /tmp/test-git-repo
+  remote_url: "${TEST_GIT_REMOTE_URL}"  # Optional: remote repository URL
+  branch: "main"
+  author_name: "${TEST_GIT_AUTHOR:-Test Author}"
+  author_email: "${TEST_GIT_EMAIL:-test@example.com}"
+  
+  # Test data configuration
+  test_data:
+    test_file: "test_config.txt"
+    commit_message: "Test commit from integration tests"
+
+# Grafana Dashboard Integration
+grafana:
+  enabled: false  # Set to true to enable Grafana integration testing
+  url: "${TEST_GRAFANA_URL}"  # e.g., https://grafana.company.com
+  api_key: "${TEST_GRAFANA_API_KEY}"  # Grafana API key
+  ssl_verify: true
+  timeout: 30
+  
+  # Test data configuration
+  test_data:
+    folder_name: "test-folder"
+    dashboard_title: "Test Dashboard"
+    datasource_name: "test-datasource"
+
+# Prometheus Monitoring Integration
+prometheus:
+  enabled: false  # Set to true to enable Prometheus integration testing
+  url: "${TEST_PROMETHEUS_URL}"  # e.g., https://prometheus.company.com
+  pushgateway_url: "${TEST_PROMETHEUS_PUSHGATEWAY_URL}"  # Optional: Pushgateway URL
+  timeout: 30
+  
+  # Test data configuration
+  test_data:
+    job_name: "test-job"
+    instance: "test-instance"
+    metric_name: "test_metric"
+
+# Infoblox DNS/DHCP/IPAM Integration
+infoblox:
+  enabled: false  # Set to true to enable Infoblox integration testing
+  url: "${TEST_INFOBLOX_URL}"  # e.g., https://infoblox.company.com
+  username: "${TEST_INFOBLOX_USER}"
+  password: "${TEST_INFOBLOX_PASS}"
+  wapi_version: "${TEST_INFOBLOX_WAPI_VERSION:-v2.12}"
+  ssl_verify: true
+  timeout: 30
+  
+  # Test data configuration
+  test_data:
+    network: "192.168.200.0/24"
+    hostname: "test-host.example.com"
+    ip_address: "192.168.200.100"
+
+# ServiceNow ITSM Integration
+servicenow:
+  enabled: false  # Set to true to enable ServiceNow integration testing
+  instance_url: "${TEST_SERVICENOW_URL}"  # e.g., https://company.service-now.com
+  username: "${TEST_SERVICENOW_USER}"
+  password: "${TEST_SERVICENOW_PASS}"
+  timeout: 30
+  ssl_verify: true
+  
+  # Test data configuration
+  test_data:
+    short_description: "Test change request from integration tests"
+    category: "Network"
+    impact: "3"
+    urgency: "3"
+    state: "1"  # New
+
+# Jira Issue Tracking Integration
+jira:
+  enabled: false  # Set to true to enable Jira integration testing
+  server_url: "${TEST_JIRA_URL}"  # e.g., https://company.atlassian.net
+  username: "${TEST_JIRA_USER}"  # e.g., admin@company.com
+  api_token: "${TEST_JIRA_TOKEN}"  # Jira API token (preferred)
+  password: "${TEST_JIRA_PASS}"  # Alternative to API token
+  timeout: 30
+  ssl_verify: true
+  
+  # Test data configuration
+  test_data:
+    project_key: "${TEST_JIRA_PROJECT:-TEST}"
+    issue_type: "Task"
+    summary: "Test issue from integration tests"
+    description: "This is a test issue created by NornFlow integration tests"
+    priority: "Medium"
+    labels: ["automation", "test"]
+
+# General Integration Test Settings
+general:
+  # Test execution settings
+  timeout: 60  # Default timeout for integration tests
+  retry_attempts: 3  # Number of retry attempts for flaky tests
+  retry_delay: 5  # Delay between retry attempts (seconds)
+  
+  # Logging configuration
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  log_file: "/tmp/nornflow_integration_tests.log"
+  
+  # Test data cleanup
+  cleanup_after_tests: true  # Clean up test data after tests complete
+  preserve_on_failure: true  # Preserve test data if tests fail
+  
+  # Mock fallback settings
+  use_mocks_when_unavailable: true  # Use mocks when real systems are unavailable
+  mock_response_delay: 0.1  # Simulate network delay in mock responses
+
+# Environment-specific overrides
+environments:
+  development:
+    general:
+      log_level: "DEBUG"
+      cleanup_after_tests: false
+      preserve_on_failure: true
+  
+  ci:
+    general:
+      timeout: 30
+      retry_attempts: 1
+      use_mocks_when_unavailable: true
+  
+  production:
+    general:
+      timeout: 120
+      retry_attempts: 5
+      cleanup_after_tests: true

@@ -1,0 +1,38 @@
+{
+  "execution_metadata": {
+    "timestamp": "{{ execution_timestamp }}",
+    "user": "{{ execution_user }}",
+    "awx_job_id": "{{ execution_job_id }}",
+    "workflow_name": "{{ nornflow_workflow }}",
+    "dry_run": {{ nornflow_dry_run | lower }},
+    "verbosity": {{ nornflow_verbosity | int }},
+    "limit": "{{ nornflow_limit | default('') }}",
+    "git_repo": "{{ nornflow_git_repo }}",
+    "git_branch": "{{ nornflow_git_branch | default('main') }}"
+  },
+  "execution_results": {
+    "return_code": {{ nornflow_result.rc | default(-1) }},
+    "duration_seconds": {{ nornflow_result.delta | default('0') | regex_replace(':', '') | int if nornflow_result.delta is defined else 0 }},
+    "successful_hosts": {{ nornflow_successful_hosts | default([]) | to_json }},
+    "failed_hosts": {{ nornflow_failed_hosts | default([]) | to_json }},
+    "total_hosts": {{ (nornflow_successful_hosts | default([]) | length) + (nornflow_failed_hosts | default([]) | length) }},
+    "success_rate": {{ ((nornflow_successful_hosts | default([]) | length) / ((nornflow_successful_hosts | default([]) | length) + (nornflow_failed_hosts | default([]) | length)) * 100) | round(2) if ((nornflow_successful_hosts | default([]) | length) + (nornflow_failed_hosts | default([]) | length)) > 0 else 0 }}
+  },
+  "output": {
+    "stdout": {{ nornflow_result.stdout | default('') | to_json }},
+    "stderr": {{ nornflow_result.stderr | default('') | to_json }},
+    "summary": {{ nornflow_summary | default('No summary available') | to_json }}
+  },
+  "environment": {
+    "nornflow_version": "{{ nornflow_version | default('unknown') }}",
+    "python_version": "{{ ansible_python_version }}",
+    "ansible_version": "{{ ansible_version.full }}",
+    "awx_version": "{{ tower_version | default('unknown') }}"
+  },
+  "configuration": {
+    "config_path": "{{ nornflow_config_path }}",
+    "logs_path": "{{ nornflow_logs_path }}",
+    "venv_path": "{{ nornflow_venv_path }}",
+    "workflow_path": "{{ nornflow_workflow_path }}"
+  }
+}

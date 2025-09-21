@@ -1,0 +1,264 @@
+# AWX Configuration for NornFlow Integration
+# Copy this file and customize for your environment
+
+# AWX/Tower connection settings
+awx:
+  url: "https://awx.company.com"
+  username: "admin"
+  password: "${AWX_PASSWORD}"  # Use environment variable
+  # token: "${AWX_TOKEN}"      # Alternative to username/password
+  organization: "Default"
+  verify_ssl: true
+  timeout: 30
+
+# Git repository containing NornFlow workflows
+git:
+  repo_url: "https://github.com/company/nornflow-workflows.git"
+  branch: "main"
+  # credentials: "Git Credentials"  # AWX credential name if private repo
+
+# NetBox integration (optional)
+netbox:
+  enabled: true
+  url: "https://netbox.company.com"
+  token: "${NETBOX_TOKEN}"
+  ssl_verify: true
+  # Inventory sync settings
+  sync_settings:
+    device_query_filters:
+      - "status=active"
+      - "role=router"
+      - "role=switch"
+    vm_query_filters:
+      - "status=active"
+    config_context: true
+    flatten_config_context: true
+    update_on_launch: true
+
+# Credentials for various integrations
+credentials:
+  # Network device SSH credentials
+  network_devices:
+    username: "admin"
+    password: "${DEVICE_PASSWORD}"
+    enable_password: "${DEVICE_ENABLE_PASSWORD}"
+    ssh_key_file: "/opt/awx/.ssh/network_devices_key"  # Optional
+    
+  # Additional credential types
+  snmp:
+    community: "${SNMP_COMMUNITY}"
+    version: "2c"
+    
+  api_credentials:
+    username: "${API_USERNAME}"
+    password: "${API_PASSWORD}"
+
+# Integration platform credentials
+integrations:
+  grafana:
+    enabled: true
+    url: "https://grafana.company.com"
+    api_key: "${GRAFANA_API_KEY}"
+    ssl_verify: true
+    
+  prometheus:
+    enabled: true
+    url: "https://prometheus.company.com"
+    pushgateway_url: "https://pushgateway.company.com"
+    
+  servicenow:
+    enabled: true
+    instance_url: "https://company.service-now.com"
+    username: "${SERVICENOW_USER}"
+    password: "${SERVICENOW_PASS}"
+    
+  jira:
+    enabled: true
+    server_url: "https://company.atlassian.net"
+    username: "${JIRA_USER}"
+    api_token: "${JIRA_TOKEN}"
+    
+  infoblox:
+    enabled: false
+    url: "https://infoblox.company.com"
+    username: "${INFOBLOX_USER}"
+    password: "${INFOBLOX_PASS}"
+    wapi_version: "v2.12"
+
+# AWX execution settings
+execution:
+  # Default settings for NornFlow execution
+  default_verbosity: 1
+  default_timeout: 3600  # 1 hour
+  cleanup_temp_files: true
+  send_notifications: false
+  upload_results: false
+  
+  # Python environment settings
+  python_venv: "/opt/nornflow/venv"
+  python_requirements:
+    - "nornflow>=1.0.0"
+    - "netmiko>=4.0.0"
+    - "requests>=2.28.0"
+    - "jinja2>=3.0.0"
+    - "pyyaml>=6.0"
+    - "pynetbox>=7.0.0"
+    - "GitPython>=3.1.0"
+  
+  # Logging settings
+  logging:
+    level: "INFO"
+    retention_days: 30
+    log_path: "/opt/nornflow/logs"
+
+# Survey field customization
+survey_customization:
+  # Custom survey fields to add to all workflows
+  global_fields:
+    - variable: "maintenance_window"
+      question_name: "Maintenance Window"
+      question_description: "Scheduled maintenance window (YYYY-MM-DD HH:MM)"
+      type: "text"
+      required: false
+      
+    - variable: "change_request_id"
+      question_name: "Change Request ID"
+      question_description: "ServiceNow change request number"
+      type: "text"
+      required: false
+      
+    - variable: "approval_required"
+      question_name: "Approval Required"
+      question_description: "Does this change require approval?"
+      type: "multiplechoice"
+      choices: ["yes", "no"]
+      default: "yes"
+      required: true
+  
+  # Field type mappings for automatic survey generation
+  type_mappings:
+    boolean: "multiplechoice"
+    integer: "integer"
+    float: "float"
+    list: "multiplechoice"
+    string: "text"
+    password: "password"
+    
+  # Default choices for common variables
+  default_choices:
+    environment: ["development", "staging", "production"]
+    priority: ["low", "medium", "high", "critical"]
+    device_type: ["router", "switch", "firewall", "load_balancer"]
+    vendor: ["cisco", "juniper", "arista", "fortinet", "f5"]
+
+# Notification settings (optional)
+notifications:
+  enabled: false
+  channels:
+    slack:
+      webhook_url: "${SLACK_WEBHOOK_URL}"
+      channel: "#network-automation"
+      
+    email:
+      smtp_server: "smtp.company.com"
+      smtp_port: 587
+      username: "${SMTP_USER}"
+      password: "${SMTP_PASS}"
+      from_address: "nornflow@company.com"
+      to_addresses:
+        - "network-team@company.com"
+        - "devops@company.com"
+
+# Security settings
+security:
+  # Credential encryption
+  encrypt_credentials: true
+  
+  # RBAC settings
+  rbac:
+    # Users who can execute workflows
+    workflow_executors:
+      - "network-engineers"
+      - "devops-team"
+      
+    # Users who can modify workflows
+    workflow_admins:
+      - "network-architects"
+      - "automation-team"
+      
+    # Users who can view execution results
+    workflow_viewers:
+      - "network-team"
+      - "management"
+
+# Advanced AWX settings
+advanced:
+  # Custom credential types to create
+  custom_credential_types:
+    - name: "NetBox API"
+      description: "NetBox API credentials"
+      kind: "cloud"
+      inputs:
+        fields:
+          - id: "url"
+            type: "string"
+            label: "NetBox URL"
+          - id: "token"
+            type: "string"
+            label: "API Token"
+            secret: true
+      injectors:
+        env:
+          NETBOX_URL: "{{ url }}"
+          NETBOX_TOKEN: "{{ token }}"
+          
+    - name: "Network Device API"
+      description: "Network device API credentials"
+      kind: "net"
+      inputs:
+        fields:
+          - id: "username"
+            type: "string"
+            label: "API Username"
+          - id: "password"
+            type: "string"
+            label: "API Password"
+            secret: true
+          - id: "base_url"
+            type: "string"
+            label: "Base URL"
+      injectors:
+        env:
+          API_USERNAME: "{{ username }}"
+          API_PASSWORD: "{{ password }}"
+          API_BASE_URL: "{{ base_url }}"
+
+# Environment-specific overrides
+environments:
+  development:
+    execution:
+      default_verbosity: 2
+      cleanup_temp_files: false
+    survey_customization:
+      global_fields:
+        - variable: "dev_testing"
+          question_name: "Development Testing"
+          question_description: "Enable development testing mode"
+          type: "multiplechoice"
+          choices: ["yes", "no"]
+          default: "yes"
+          
+  production:
+    execution:
+      default_verbosity: 1
+      send_notifications: true
+      upload_results: true
+    security:
+      encrypt_credentials: true
+    survey_customization:
+      global_fields:
+        - variable: "production_approval"
+          question_name: "Production Approval"
+          question_description: "Production change approval number"
+          type: "text"
+          required: true
