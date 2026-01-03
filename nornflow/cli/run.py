@@ -1,18 +1,21 @@
 import ast
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import typer
 
-from nornflow import NornFlowBuilder, WorkflowFactory
+from nornflow import NornFlowBuilder
 from nornflow.cli.exceptions import CLIRunError
 from nornflow.constants import (
+    FailureStrategy,
     NORNFLOW_SPECIAL_FILTER_KEYS,
     NORNFLOW_SUPPORTED_YAML_EXTENSIONS,
 )
 from nornflow.exceptions import NornFlowError
+from nornflow.utils import normalize_failure_strategy
 
 app = typer.Typer(help="Run NornFlow tasks and workflows")
 
@@ -78,29 +81,74 @@ def parse_key_value_pairs(value: str | None, error_context: str) -> dict[str, An
     """
     Parse a string of key=value pairs into a dictionary with intelligent value parsing.
 
-    Handles multiple formats for values:
-    - Python literals via ast.literal_eval
-    - Simple strings
-    - Comma-separated values (auto-converted to lists)
+    This function splits the input string on commas, but only those not inside quotes
+    or brackets, using a regex lookahead to avoid breaking nested structures. Each
+    key=value pair is then processed: keys have quotes stripped if present, and values
+    are handled based on quoting—quoted values become strings (with quotes removed),
+    while unquoted values are evaluated as Python literals (e.g., lists, dicts) via
+    ast.literal_eval, falling back to strings if evaluation fails. Special keys like
+    'hosts' and 'groups' auto-convert unquoted comma-separated strings to lists.
+
+    Parsing steps:
+    1. If input is empty, return empty dict.
+    2. Use regex to split on commas outside quotes/brackets.
+    3. For each pair, split on '=' and strip whitespace.
+    4. Strip quotes from keys if present.
+    5. For values: If quoted (single/double), treat as string (unquote). If unquoted,
+       attempt literal evaluation; fallback to string.
+    6. Handle special keys for list conversion.
+    7. Raise error with examples on failure.
 
     Args:
-        value: String containing key=value pairs
-        error_context: Context for error messages
+        value: String containing key=value pairs, e.g., "a=1,b='hello',c=[1,2]".
+        error_context: Context for error messages, e.g., "vars" or "inventory filters".
 
     Returns:
-        Dictionary of parsed key-value pairs
+        Dictionary of parsed key-value pairs.
+
+    Raises:
+        CLIRunError: If parsing fails, with examples.
+
+    Examples:
+        - Simple unquoted: "a=1,b=hello" -> {"a": 1, "b": "hello"}
+        - Quoted strings: "a='hello',b=\"world\"" -> {"a": "hello", "b": "world"}
+        - Lists: "a=[1,2,3],b=['x','y']" -> {"a": [1, 2, 3], "b": ["x", "y"]}
+        - Dicts: "a={'key': 'val'},b={\"k\": 1}" -> {"a": {"key": "val"}, "b": {"k": 1}}
+        - Special keys: "hosts=host1,host2" -> {"hosts": ["host1", "host2"]}
+        - Nested/complex: "a=[1,{'b': 2}],c='not,eval'" -> {"a": [1, {"b": 2}], "c": "not,eval"}
+        - Invalid: "a=1,b" -> Raises CLIRunError with examples.
     """
     if not value:
         return {}
 
     try:
         parsed_dict = {}
-        # Split on commas that are not within brackets, quotes, curly brackets, or parentheses
-        pairs = re.split(r",(?=(?:[^{}()[\]]*[{([][^{}()[\]]*[})\]])*[^{}()[\]]*$)", value)
+        # This pattern splits on commas that are NOT inside any type of quotes or brackets
+        pairs = re.split(
+            r"""
+            ,                           # Match a comma
+            (?=                         # Followed by (positive lookahead)
+                (?:                     # Non-capturing group
+                    [^"'{}()[\]]*       # Any chars except quotes/brackets
+                    (?:                 # Non-capturing group
+                        "[^"]*"         # Double quoted content
+                        |'[^']*'        # OR single quoted content
+                        |{[^}]*}        # OR curly bracket content
+                        |\([^)]*\)      # OR parentheses content
+                        |\[[^\]]*\]     # OR square bracket content
+                    )
+                )*                      # Zero or more times
+                [^"'{}()[\]]*           # Any chars except quotes/brackets
+                $                       # Until end of string
+            )
+            """,
+            value,
+            flags=re.VERBOSE,
+        )
 
         for pair in pairs:
             if "=" not in pair:
-                raise typer.BadParameter(f"Invalid {error_context} format: {pair}.")
+                raise CLIRunError(f"Invalid {error_context} format: {pair}.")
 
             k, v = pair.split("=", 1)
             k = k.strip()
@@ -110,11 +158,17 @@ def parse_key_value_pairs(value: str | None, error_context: str) -> dict[str, An
             if (k.startswith('"') and k.endswith('"')) or (k.startswith("'") and k.endswith("'")):
                 k = k[1:-1]
 
-            # Process the value
-            parsed_dict[k] = process_value(k, v)
+            # Check if value is quoted
+            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                # Treat as string, remove quotes
+                v = v[1:-1]
+                parsed_dict[k] = v
+            else:
+                # Attempt literal evaluation for unquoted values
+                parsed_dict[k] = process_value(k, v)
 
     except Exception as e:
-        raise typer.BadParameter(
+        raise CLIRunError(
             f"{error_context.capitalize()} format examples:\n"
             f"- Simple values: \"key='value'\"\n"
             f"- Lists: \"key=['value1', 'value2']\" or \"key=value1,value2,value3\"\n"
@@ -155,9 +209,9 @@ def parse_inventory_filters(value: str | None) -> dict[str, Any]:
     return parse_key_value_pairs(value, "inventory filters")
 
 
-def parse_variables(value: str | None) -> dict[str, Any]:
+def parse_vars(value: str | None) -> dict[str, Any]:
     """
-    Convert a string of key=value pairs into a dictionary for CLI variables.
+    Convert a string of key=value pairs into a dictionary for vars.
 
     Args:
         value: String in one of these formats:
@@ -165,9 +219,9 @@ def parse_variables(value: str | None) -> dict[str, Any]:
             - "server=10.0.0.1, debug=true, ports=22,80"
 
     Returns:
-        Dictionary of variables
+        Dictionary of vars
     """
-    return parse_key_value_pairs(value, "variables")
+    return parse_key_value_pairs(value, "vars")
 
 
 def parse_processors(value: str | None) -> list[dict[str, Any]]:
@@ -201,7 +255,7 @@ def parse_processors(value: str | None) -> list[dict[str, Any]]:
 
         # Validate required 'class' key
         if "class" not in proc_dict:
-            raise typer.BadParameter("Each processor must have a 'class' key specified")
+            raise CLIRunError("Each processor must have a 'class' key specified")
 
         # If args not specified, add empty dict
         if "args" not in proc_dict:
@@ -212,13 +266,37 @@ def parse_processors(value: str | None) -> list[dict[str, Any]]:
     return result
 
 
+def parse_failure_strategy(value: str | None) -> FailureStrategy | None:
+    """
+    Parse a string into a FailureStrategy enum value.
+
+    Delegates to shared utility for consistent validation and error handling.
+
+    Args:
+        value: String representing the failure strategy (case-insensitive).
+               Supports both hyphen and underscore variations.
+
+    Returns:
+        FailureStrategy enum value or None if not provided.
+
+    Raises:
+        CLIRunError: If the value is invalid.
+    """
+    if not value:
+        return None
+
+    return normalize_failure_strategy(value, CLIRunError)
+
+
 def get_nornflow_builder(
     target: str,
     args: dict[str, Any],
     inventory_filters: dict[str, Any],
     settings_file: str = "",
     processors: list[dict[str, Any]] | None = None,
-    cli_vars: dict[str, Any] | None = None,
+    vars: dict[str, Any] | None = None,
+    failure_strategy: FailureStrategy | None = None,
+    dry_run: bool = False,
 ) -> NornFlowBuilder:
     """
     Build the workflow using the provided target, arguments, inventory filters, and dry-run option.
@@ -229,7 +307,9 @@ def get_nornflow_builder(
         inventory_filters (dict): The inventory filters.
         settings_file (str): The path to a YAML settings file for NornFlowSettings.
         processors (list): The processor configurations.
-        cli_vars (dict): CLI variables with highest precedence.
+        vars (dict): Vars with highest precedence.
+        failure_strategy (FailureStrategy): Failure strategy with highest precedence.
+        dry_run (bool): Whether to perform a dry run.
 
     Returns:
         NornFlowBuilder: The builder instance with the configured workflow.
@@ -245,20 +325,27 @@ def get_nornflow_builder(
     if processors:
         builder.with_processors(processors)
 
-    # Add CLI variables if specified
-    if cli_vars:
-        builder.with_cli_vars(cli_vars)
+    # Add vars if specified
+    if vars:
+        builder.with_vars(vars)
 
-    # Add CLI filters if specified
+    # Add filters if specified
     if inventory_filters:
-        builder.with_cli_filters(inventory_filters)
+        builder.with_filters(inventory_filters)
+
+    # Add failure strategy if specified
+    if failure_strategy:
+        builder.with_failure_strategy(failure_strategy)
+
+    # Add dry_run if specified
+    if dry_run:
+        builder.with_kwargs(dry_run=dry_run)
 
     if any(target.endswith(ext) for ext in NORNFLOW_SUPPORTED_YAML_EXTENSIONS):
         target_path = Path(target)
         if target_path.exists():
             absolute_path = target_path.resolve()
-            wf = WorkflowFactory.create_from_file(absolute_path)
-            builder.with_workflow_object(wf)
+            builder.with_workflow_path(str(absolute_path))
         else:
             builder.with_workflow_name(target)
     else:
@@ -313,7 +400,7 @@ VARS_OPTION = typer.Option(
     None,
     "--vars",
     "-v",
-    help="Variables in flexible format, with highest precedence in the variables system."
+    help="Vars in flexible format, with highest precedence in the variables system."
     "\nExamples:\n- \"server='10.0.0.1', debug=True\"\n- \"domain='example.com', ports=[80,443]\"",
 )
 
@@ -332,6 +419,16 @@ PROCESSORS_OPTION = typer.Option(
     "Multiple processors can be separated with semicolons.",
 )
 
+FAILURE_STRATEGY_OPTION = typer.Option(
+    None,
+    "--failure-strategy",
+    "-f",
+    help="Failure handling strategy. "
+    "Options: 'skip-failed' (default, skip failed hosts), 'fail-fast' (stop on first error), "
+    "'run-all' (run all tasks, report failures at end). "
+    "Both hyphen and underscore variations are accepted (e.g., 'fail-fast' or 'fail_fast').",
+)
+
 
 # TODO: Eventually, decommission the legacy options.
 @app.command()
@@ -344,6 +441,7 @@ def run(
     inventory_filters: str | None = INVENTORY_FILTERS_OPTION,
     processors: str | None = PROCESSORS_OPTION,
     vars: str | None = VARS_OPTION,
+    failure_strategy: str | None = FAILURE_STRATEGY_OPTION,
     dry_run: bool = DRY_RUN_OPTION,
 ) -> None:
     """
@@ -358,11 +456,14 @@ def run(
         # Parse inventory filters if provided
         parsed_inventory_filters = parse_inventory_filters(inventory_filters) if inventory_filters else {}
 
-        # Parse CLI variables if provided
-        parsed_vars = parse_variables(vars) if vars else {}
+        # Parse vars if provided
+        parsed_vars = parse_vars(vars) if vars else {}
 
         # Parse processors if provided
         parsed_processors = parse_processors(processors) if processors else []
+
+        # Parse failure strategy if provided
+        parsed_failure_strategy = parse_failure_strategy(failure_strategy) if failure_strategy else None
 
         # Combine all filter types into one dictionary
         all_inventory_filters = parsed_inventory_filters.copy()
@@ -395,19 +496,31 @@ def run(
             )
 
         builder = get_nornflow_builder(
-            target, parsed_args, all_inventory_filters, settings, parsed_processors, parsed_vars
+            target,
+            parsed_args,
+            all_inventory_filters,
+            settings,
+            parsed_processors,
+            parsed_vars,
+            parsed_failure_strategy,
+            dry_run,
         )
 
         nornflow = builder.build()
-        nornflow.run(dry_run=dry_run)
+
+        # Capture the exit code from nornflow.run()
+        exit_code = nornflow.run()
+
+        # Exit with the workflow's exit code if non-zero, otherwise return normally
+        if exit_code != 0:
+            sys.exit(exit_code)
 
     except NornFlowError as e:
         CLIRunError(
             message=f"NornFlow error while running {target}: {e}",
-            hint="Check your task configuration, inventory filters, and NornFlow setup.",
             original_exception=e,
         ).show()
-        raise typer.Exit(code=2)  # noqa: B904
+        raise typer.Exit(code=102)  # noqa: B904
 
     except FileNotFoundError as e:
         CLIRunError(
@@ -415,7 +528,7 @@ def run(
             hint=f"Check that the file '{target}' exists and is accessible.",
             original_exception=e,
         ).show()
-        raise typer.Exit(code=2)  # noqa: B904
+        raise typer.Exit(code=103)  # noqa: B904
 
     except PermissionError as e:
         CLIRunError(
@@ -423,7 +536,7 @@ def run(
             hint="Check that you have sufficient permissions to access the required files.",
             original_exception=e,
         ).show()
-        raise typer.Exit(code=2)  # noqa: B904
+        raise typer.Exit(code=104)  # noqa: B904
 
     except Exception as e:
         CLIRunError(
@@ -431,4 +544,4 @@ def run(
             hint="This may be a bug. Please report it if the issue persists.",
             original_exception=e,
         ).show()
-        raise typer.Exit(code=2)  # noqa: B904
+        raise typer.Exit(code=105)  # noqa: B904

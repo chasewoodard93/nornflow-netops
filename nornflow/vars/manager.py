@@ -3,10 +3,9 @@ import os
 from pathlib import Path
 from typing import Any
 
-import jinja2
+import jinja2.exceptions
 import yaml
 
-from nornflow.builtins.jinja2_filters import ALL_FILTERS
 from nornflow.vars.constants import (
     DEFAULTS_FILENAME,
     ENV_VAR_PREFIX,
@@ -14,6 +13,7 @@ from nornflow.vars.constants import (
 )
 from nornflow.vars.context import NornFlowDeviceContext
 from nornflow.vars.exceptions import TemplateError, VariableError
+from nornflow.vars.jinja2_utils import Jinja2EnvironmentManager
 from nornflow.vars.proxy import NornirHostProxy
 
 logger = logging.getLogger(__name__)
@@ -182,16 +182,7 @@ class NornFlowVariablesManager:
             env_vars=self._env_vars,
         )
 
-        self.jinja_env = jinja2.Environment(
-            undefined=jinja2.StrictUndefined,
-            extensions=["jinja2.ext.loopcontrols"],
-            autoescape=False,  # noqa: S701 - Network automation tool, not generating HTML
-        )
-
-        # Register builtin j2 filters
-        for filter_name, filter_func in ALL_FILTERS.items():
-            self.jinja_env.filters[filter_name] = filter_func
-
+        self._jinja2_manager = Jinja2EnvironmentManager()
         self._device_contexts: dict[str, NornFlowDeviceContext] = {}
 
     def _load_environment_variables(self) -> dict[str, Any]:
@@ -426,9 +417,7 @@ class NornFlowVariablesManager:
             raise TemplateError(f"Host name not provided for template resolution: {template_str}")
 
         try:
-            template = self.jinja_env.from_string(template_str)
             device_ctx = self.get_device_context(host_name)
-
             nornflow_default_vars = device_ctx.get_flat_context()
 
             resolution_context_dict = nornflow_default_vars.copy()
@@ -436,6 +425,8 @@ class NornFlowVariablesManager:
                 resolution_context_dict.update(additional_vars)
 
             context_for_jinja = VariableLookupContext(self, host_name, resolution_context_dict)
+
+            template = self._jinja2_manager.env.from_string(template_str)
             return template.render(context_for_jinja)
 
         except jinja2.exceptions.UndefinedError as e:
@@ -453,20 +444,26 @@ class NornFlowVariablesManager:
 
     def resolve_data(self, data: Any, host_name: str, additional_vars: dict[str, Any] | None = None) -> Any:
         """
-        Recursively resolves Jinja2 templates within a data structure.
+        Recursively resolve Jinja2 templates in nested data structures.
 
         Args:
-            data: The data structure (str, list, dict) to process.
-            host_name: The name of the host for template resolution.
-            additional_vars: Optional variables for the Jinja2 context.
+            data: The data structure to resolve (dict, list, string, etc.).
+            host_name: The name of the host for which to resolve variables.
+            additional_vars: Additional variables to include in the context.
 
         Returns:
-            A new data structure with Jinja2 templates resolved.
+            The data structure with all templates resolved.
         """
         if isinstance(data, str):
-            return self.resolve_string(data, host_name, additional_vars)
-        if isinstance(data, list):
-            return [self.resolve_data(item, host_name, additional_vars) for item in data]
+            # Check if the string contains Jinja2 markers
+            if any(marker in data for marker in JINJA2_MARKERS):
+                return self.resolve_string(data, host_name, additional_vars)
+            return data
         if isinstance(data, dict):
             return {k: self.resolve_data(v, host_name, additional_vars) for k, v in data.items()}
+        if isinstance(data, (list, tuple)):
+            # Convert both lists and tuples to lists after resolving items
+            # This ensures YAML-defined lists remain lists, even if converted to tuples for hashability
+            return [self.resolve_data(item, host_name, additional_vars) for item in data]
+        # Return other types as-is
         return data
