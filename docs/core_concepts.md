@@ -8,30 +8,35 @@
 - [Project Structure](#project-structure)
 - [Settings & Configuration](#settings--configuration)
   - [Configuration Files](#configuration-files)
-  - [Settings Resolution](#settings-resolution)
   - [Multi-Environment Configuration](#multi-environment-configuration)
 - [Catalogs](#catalogs)
   - [Task Catalog](#task-catalog)
   - [Workflow Catalog](#workflow-catalog)
   - [Filter Catalog](#filter-catalog)
+  - [Blueprint Catalog](#blueprint-catalog)
   - [Catalog Discovery](#catalog-discovery)
 - [Domains](#domains)
   - [What is a Domain?](#what-is-a-domain)
   - [Domain Variables](#domain-variables)
   - [Multiple Workflow Roots](#multiple-workflow-roots)
+- [Blueprints](#blueprints)
 - [Writing Workflows](#writing-workflows)
   - [Workflow Structure](#workflow-structure)
   - [Task Definition](#task-definition)
   - [Task Arguments & Results](#task-arguments--results)
 - [Inventory Filtering](#inventory-filtering)
-  - [Filter Types](#filter-types)
-  - [Filter Application Order](#filter-application-order)
+  - [Types of Filters](#types-of-filters)
+  - [Filter Behavior](#filter-behavior)
+  - [Ways to Define Filter Parameters](#ways-to-define-filter-parameters)
   - [Creating Custom Filters](#creating-custom-filters)
+- [Hooks System](#hooks-system)
+  - [What are Hooks?](#what-are-hooks)
+  - [Built-in Hooks](#built-in-hooks)
 - [Processors](#processors)
   - [What Processors Do](#what-processors-do)
-  - [Processor Configuration](#processor-configuration)
   - [Processor Precedence](#processor-precedence)
 - [Execution Model](#execution-model)
+- [Failure Strategies (Summary)](#failure-strategies-summary)
 - [Best Practices](#best-practices)
 
 ## Introduction
@@ -42,7 +47,6 @@ This guide covers the fundamental concepts you need to understand to effectively
 
 ## Declarative vs. Imperative
 
-
 Before we go any further, there's an **important clarification** to be made about a rather 'hot topic' within the network-automation community:  
 When we say NornFlow provides a *"declarative way to define workflows"* we're referring to the workflow structure and orchestration itself, not the individual tasks within those workflows. The declarative vs. imperative nature of each task depends entirely on how the task developer chose to implement it. NornFlow simply provides the framework to organize and execute these tasks in a predictable, YAML-defined manner.
 
@@ -52,38 +56,13 @@ When we say NornFlow provides a *"declarative way to define workflows"* we're re
 # IMPERATIVE task - tells the system HOW to do something
 def create_vlan(task: Task, vlan_id: int, vlan_name: str) -> Result:
     """Creates a VLAN by sending configuration commands."""
-    commands = [
-        f"vlan {vlan_id}",
-        f"name {vlan_name}",
-        "exit"
-    ]
-    # Sends commands regardless of current state
-    result = task.run(netmiko_send_config, config_commands=commands)
     return Result(host=task.host, result=f"Created VLAN {vlan_id}")
 
 # DECLARATIVE task - tells the system WHAT the end state should be
 def ensure_vlan(task: Task, vlan_id: int, vlan_name: str) -> Result:
     """Ensures a VLAN exists with the specified configuration."""
-    # First, check current state
-    existing_vlans = task.run(get_vlans)
-    
-    if vlan_id in existing_vlans:
-        if existing_vlans[vlan_id]['name'] == vlan_name:
-            return Result(host=task.host, result=f"VLAN {vlan_id} already exists with correct name")
-        else:
-            # Update name if different
-            task.run(netmiko_send_config, config_commands=[
-                f"vlan {vlan_id}",
-                f"name {vlan_name}"
-            ])
-            return Result(host=task.host, result=f"Updated VLAN {vlan_id} name to {vlan_name}")
-    else:
-        # Create VLAN if it doesn't exist
-        task.run(netmiko_send_config, config_commands=[
-            f"vlan {vlan_id}",
-            f"name {vlan_name}"
-        ])
-        return Result(host=task.host, result=f"Created VLAN {vlan_id}")
+    # Logic to check if VLAN exists and create if needed
+    return Result(host=task.host, result=f"VLAN {vlan_id} is present")
 ```
 
 Both tasks can be used identically in NornFlow workflows:
@@ -92,64 +71,113 @@ Both tasks can be used identically in NornFlow workflows:
 workflow:
   name: "VLAN Management"
   tasks:
-    - name: create_vlan      # Imperative approach
+    - name: create_vlan    # Imperative approach
       args:
         vlan_id: 100
-        vlan_name: "SERVERS"
-        
-    - name: ensure_vlan      # Declarative approach  
+        vlan_name: "Users"
+    
+    # OR
+    
+    - name: ensure_vlan    # Declarative approach
       args:
         vlan_id: 100
-        vlan_name: "SERVERS"
+        vlan_name: "Users"
 ```
 
 The choice between imperative and declarative task implementation is up to the task developer, not NornFlow itself.
 
 ## Architecture Overview
 
-NornFlow's architecture consists of three main components working together:
+NornFlow's architecture consists of several components working together in a layered design:
 
 ```
-┌─────────────────┐
-│    NornFlow     │ ← Orchestrator: Manages settings, catalogs, processors
-└────────┬────────┘
-         │ creates
-┌────────┴────────┐
-│ NornirManager   │ ← Bridge: Interfaces with Nornir, manages inventory
-└────────┬────────┘
-         │ uses
-┌────────┴────────┐
-│    Workflow     │ ← Executor: Runs tasks, applies filters, handles results
-└─────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                    NornFlow                             │ ← Main Orchestrator
+└──┬──────────────────┬──────────────────┬────────────────┘    - Controls the entire workflow execution
+   │                  │                  │                     - Discovers and catalogs tasks/workflows/filter
+   ▼                  ▼                  ▼                     - Manages configuration
+┌─────────────┐  ┌─────────────┐     ┌────────────┐
+│WorkflowModel│  │NornirManager│ ◄───│NornFlowVars│        ← Supporting Components
+└──┬──────────┘  └───┬─────┬───┘     │ Manager    │           - Data modeling
+   │               ▲ |     │         └────────────┘           - Nornir integration
+   ▼               │ |     ▼               ▲                  - Variable management
+┌─────────┐        │ |  ┌───────┐          │                  - Processors management
+│TaskModel│───┐────┘ |  │Nornir │          │
+└─────────┘   │      |  └───────┘          │
+              │      |      ▲              │
+              │      ▼      |              │
+              │    ┌─────────────┐         │
+              │    │ Processors  │         │             ← Processors are applied to the Nonrnir object
+              │    │  - Vars     |         |               by NornirManager, as part of the processing
+              |    |  - Hooks    │         │               orchestrated by the NornFlow object.
+              │    │  - Failure  │         │
+              │    │  - Default  │         │
+              │    └─────────────┘         │
+              └────────────────────────────┘
 ```
+Notice how `Nornir` is the fundamental block where all paths lead to in the above diagram.
 
 ### Component Relationships
 
-**NornFlow (Orchestrator)**
-- Loads and validates settings from nornflow.yaml
-- Builds catalogs of available tasks, workflows, and filters
-- Creates and configures NornirManager and Workflow instances
-- Manages processor loading and precedence
+**NornFlow (Central Orchestrator)**
+- Serves as the main entry point and controller for the entire system
+- Creates and manages the primary components (WorkflowModel, NornirManager, NornFlowVarsManager)
+- Coordinates the execution flow between components
+- Provides discovery and cataloging of tasks, workflows, filters, and blueprints
+- Handles configuration management and variable resolution logic
 
-**NornirManager (Bridge)**
-- Creates and configures Nornir instances based on settings
-- Provides abstracted access to Nornir's inventory
-- Applies inventory filters
-- Manages processor attachment to Nornir
+**WorkflowModel (Pure Data Structure)**
+- Contains the workflow definition as pure data (no execution logic)
+- Holds tasks, variables, inventory filters, and failure strategy configurations
+- Created by NornFlow from YAML files or dictionaries
+- Contains TaskModel instances representing individual operations
 
-**Workflow (Executor)**
-- Parses workflow YAML definitions
-- Executes tasks in sequence on filtered inventory
-- Handles task results and variable management
-- Applies workflow-specific processors
+**TaskModel (Execution Unit)**
+- Represents a single task to be executed
+- Inherits from `HookableModel` to support hook configurations
+- Contains task name, arguments, and variable storage instructions
+- Uses both `NornirManager` and `NornFlowVarsManager` during execution
+- Validates task definition structure and hook compatibility
+
+**NornirManager (Integration Bridge)**
+- Provides an abstraction layer over Nornir
+- Creates and configures the Nornir instance
+- Manages inventory filtering and device connections
+- Handles processor attachment to Nornir
+- Receives execution results from TaskModel instances
+
+**NornFlowVarsManager (Variable System)**
+- Manages variable contexts for all devices
+- Handles variable resolution and Jinja2 template rendering
+- Maintains isolation between device contexts
+- Provides variable lookup and storage throughout execution
+- Interfaces with Nornir for host-specific data
+
+**Nornir (Execution Engine)**
+- The underlying engine where execution actually happens
+- Manages device connections and parallel execution
+- Provides the core task execution framework
+- Maintains inventory and execution results
+- Used by both NornirManager and TaskModel
 
 ### Execution Flow
 
-1. **Initialization**: NornFlow reads settings and builds catalogs
-2. **Workflow Loading**: YAML workflow is parsed and validated
-3. **Inventory Filtering**: Filters are applied to select target devices
-4. **Task Execution**: Tasks run sequentially on each device
-5. **Result Processing**: Processors format and display results
+1. **Initialization**: NornFlow loads settings and builds catalogs of tasks, workflows, filters, and blueprints
+2. **Workflow Loading**: A YAML workflow is parsed into a WorkflowModel with nested TaskModel instances
+3. **Component Creation**: NornFlow creates the NornirManager and NornFlowVarsManager
+4. **Inventory Filtering**: NornFlow applies filters through NornirManager to select target devices
+5. **Task Execution Loop**: For each TaskModel in the workflow:
+   - TaskModel uses NornirManager to execute on target devices
+   - TaskModel uses NornFlowVarsManager to resolve variables and store results
+6. **Result Processing**: NornFlow interfaces with Processors to format and display results
+
+This architecture ensures clear separation between:
+- Orchestration logic (NornFlow)
+- Data structures (pydantic-serdes models: WorkflowModel, TaskModel)
+- Execution mechanisms (NornirManager, Nornir)
+- Variable management (NornFlowVarsManager)
+
+All components ultimately interact with Nornir, which serves as the foundation for actual task execution.
 
 ## Project Structure
 
@@ -160,6 +188,9 @@ my_project/
 ├── nornflow.yaml           # NornFlow configuration
 ├── nornir_config.yaml      # Nornir configuration
 ├── inventory.yaml          # Device inventory
+├── blueprints/             # Reusable task collections
+│   ├── backup_tasks.yaml
+│   └── validation_tasks.yaml
 ├── workflows/              # Workflow definitions
 │   ├── backup/             # Domain: "backup"
 │   │   └── daily_backup.yaml
@@ -169,9 +200,11 @@ my_project/
 │   └── my_tasks.py
 ├── filters/                # Custom filter functions
 │   └── site_filters.py
+├── hooks/                  # Custom hooks
+│   └── custom_hook.py
 └── vars/                   # Variable files
     ├── defaults.yaml       # Global variables
-    ├── backup/             # Domain-specific variables
+    ├── backup/             # Domain variables
     │   └── defaults.yaml
     └── provision/
         └── defaults.yaml
@@ -194,7 +227,7 @@ NornFlow finds its settings file in this order:
 
 1. **Environment variable**: `NORNFLOW_SETTINGS=/path/to/config.yaml`
 2. **CLI option**: `nornflow run --settings /path/to/config.yaml workflow.yaml`
-3. **Default**: `./nornflow.yaml` in current directory
+3. **Default**: nornflow.yaml in current directory
 
 ### Multi-Environment Configuration
 
@@ -224,29 +257,33 @@ nornflow run --settings nornflow-dev.yaml test_workflow.yaml
 # nornflow-dev.yaml
 nornir_config_file: "configs/nornir-dev.yaml"
 dry_run: true
-local_workflows_dirs: ["workflows", "dev_workflows"]
+local_workflows: ["workflows", "dev_workflows"]
 
 # nornflow-prod.yaml
 nornir_config_file: "configs/nornir-prod.yaml"
 dry_run: false
-local_workflows_dirs: ["workflows"]
+local_workflows: ["workflows"]
+local_tasks: ["tasks"]
+local_filters: ["filters"]
+local_hooks: ["hooks"]
+local_blueprints: ["blueprints"]
 ```
 
 ## Catalogs
 
-NornFlow automatically discovers and builds catalogs of available tasks, workflows, and filters based on your configuration. These catalogs are central to NornFlow's operation, allowing you to reference tasks and filters by name in your workflows.
+NornFlow automatically discovers and builds catalogs of available tasks, workflows, filters, and blueprints based on your configuration. These catalogs are central to NornFlow's operation, allowing you to reference these NornFlow assets with ease throughout workflows.
 
 ### Task Catalog
 
 The task catalog contains all available Nornir tasks that can be used in workflows. Tasks are discovered from:
 
 1. **Built-in tasks** - Always available (e.g., `echo` & `set`)
-2. **Local directories** - Specified in `local_tasks_dirs` setting
+2. **Local directories** - Specified in `local_tasks` setting
 3. **Imported packages** - *(Planned feature, not yet implemented)*
 
 ```yaml
 # nornflow.yaml
-local_tasks_dirs:
+local_tasks:
   - "tasks"
   - "/shared/network_tasks"
 ```
@@ -265,11 +302,11 @@ def my_task(task: Task, **kwargs) -> Result:
 
 ### Workflow Catalog
 
-The workflow catalog contains all discovered workflow YAML files. Workflows are discovered from directories specified in `local_workflows_dirs`:
+The workflow catalog contains all discovered workflow YAML files. Workflows are discovered from directories specified in `local_workflows`:
 
 ```yaml
 # nornflow.yaml
-local_workflows_dirs:
+local_workflows:
   - "workflows"
   - "../shared_workflows"
 ```
@@ -281,11 +318,11 @@ All files with `.yaml` or `.yml` extensions in these directories (including subd
 The filter catalog contains inventory filter functions that can be used in workflow definitions. Filters are discovered from:
 
 1. **Built-in filters** - currently `hosts` and `groups` filters
-2. **Local directories** - Specified in `local_filters_dirs` setting
+2. **Local directories** - Specified in `local_filters` setting
 
 ```yaml
 # nornflow.yaml
-local_filters_dirs:
+local_filters:
   - "filters"
   - "../custom_filters"
 ```
@@ -300,21 +337,31 @@ def site_filter(host: Host, region: str) -> bool:
     return host.data.get("region") == region
 ```
 
+### Blueprint Catalog
+
+The blueprint catalog contains all discovered blueprint YAML files. Blueprints are discovered from directories specified in `local_blueprints`:
+
+```yaml
+# nornflow.yaml
+local_blueprints:
+  - "blueprints"
+  - "../shared_blueprints"
+```
+
+All files with `.yaml` or `.yml` extensions in these directories (including subdirectories) are considered blueprints.
+
 ### Catalog Discovery
 
 NornFlow performs recursive searches in all configured directories:
 
 - **Automatic discovery** happens during NornFlow initialization
-- **Name conflicts** - Later discoveries override earlier ones (built-ins can be overridden). 
-- **View catalogs** - Use `nornflow show --catalog` to see all discovered items
-
-**⚠️ WARNING:** While you can technically override built-in components, **be extremely careful** when doing so. Built-ins often have deep integration with NornFlow's core functionality. For example, the `set` task has special handling in the variable management system, and overriding it may break workflow execution. Instead of overriding built-ins, consider creating components with different names for custom behavior.
+- **Name conflicts** - NornFlow prevents custom or imported tasks/filters to override built-in ones. However later custom or imported discoveries will override earlier ones. 
+- **View catalogs** - Use `nornflow show --catalogs` to see all discovered items, or specific `--tasks`, `--filters`, `--workflows`, and `--blueprints` options.
 
 **Discovery order:**
 1. Built-in items are loaded first
 2. Local directories are processed in the order specified
 3. Each directory is searched recursively
-
 
 ## Domains
 
@@ -345,7 +392,7 @@ When using multiple workflow directories:
 
 ```yaml
 # nornflow.yaml
-local_workflows_dirs:
+local_workflows:
   - "core_workflows"
   - "customer_workflows"
 ```
@@ -354,6 +401,38 @@ Domain resolution:
 - `core_workflows/backup/daily.yaml` → Domain: "backup"
 - `customer_workflows/backup/custom.yaml` → Domain: "backup" (same domain!)
 - Both share variables from `vars/backup/defaults.yaml`
+
+## Blueprints
+
+Blueprints are reusable collections of tasks that can be referenced within workflows. They enable code reuse, modularity, and maintainability by defining common task sequences once and using them across multiple workflows.
+
+**Key characteristics:**
+- Contain **only** a tasks list (no workflow metadata)
+- Referenced by name or path in workflows
+- Support nesting (blueprints can reference other blueprints)
+- Expanded during workflow loading (assembly-time)
+
+**Basic example:**
+
+```yaml
+# blueprints/pre_checks.yaml
+tasks:
+  - name: netmiko_send_command
+    args:
+      command_string: "show version"
+  - name: netmiko_send_command
+    args:
+      command_string: "show interfaces status"
+
+# workflows/deploy.yaml
+workflow:
+  name: "Deploy Configuration"
+  tasks:
+    - blueprint: pre_checks.yaml
+    - name: apply_config
+```
+
+For comprehensive coverage including conditional inclusion, nested blueprints, dynamic selection, variable resolution, and composition strategies, see the [Blueprints Guide](./blueprints_guide.md).
 
 ## Writing Workflows
 
@@ -378,7 +457,7 @@ workflow:
   tasks:                         # REQUIRED - list of tasks
     - name: configure_vlans
       args:
-        vlans: "{{ vlan_range }}"
+        vlan_ids: "{{ vlan_range }}"
 ```
 
 ### Task Definition
@@ -421,7 +500,7 @@ tasks:
 
   - name: echo
     args:
-      message: "Device version is {{ version_info }}"
+      msg: "Device version is {{ version_info }}"
 ```
 
 ## Inventory Filtering
@@ -435,7 +514,7 @@ NornFlow provides powerful and flexible inventory filtering capabilities that de
 - **groups** - List of group names to include (matches any in list)
 
 #### 2. Custom Filter Functions
-NornFlow can use custom filter functions defined by your `local_filters_dirs` setting (configured in `nornflow.yaml`). These functions provide advanced filtering logic beyond simple attribute matching.
+NornFlow can use custom filter functions defined by your `local_filters` setting (configured in nornflow.yaml). These functions provide advanced filtering logic beyond simple attribute matching.
 
 #### 3. Direct Attribute Filtering
 As it is the case with Nornir, any host attribute can be used as a filter key for simple equality matching:
@@ -466,112 +545,278 @@ inventory_filters:
 #### Dictionary Parameters
 ```yaml
 inventory_filters:
-  site_filter: # passing 2 keyword args to a 'site_filter' in the Filters Catalog
-    region: "east"
-    site_type: "campus"
+  site_filter:  # passing 2 keyword args to a 'site_filter' in the Filters Catalog
+    region: "west"
+    criticality: "high"
 ```
 
-#### Single Parameter as List or Value
+#### List Parameters
 ```yaml
 inventory_filters:
-  in_subnets: ["10.1.0.0/24", "10.2.0.0/24"]  # List parameter
-  exact_model: "C9300-48P"                    # Single value parameter
+  complex_filter: ["arg1", "arg2", "arg3"]  # passing 3 positional args to 'complex_filter'
+```
+
+#### Single Value Parameter
+```yaml
+inventory_filters:
+  in_region: "east"  # passing a single value to 'in_region' filter
 ```
 
 ### Creating Custom Filters
 
-Custom filters are Python functions that:
-1. Take a `Host` object as their first parameter
-2. Return `True` if the host should be included, `False` otherwise
-3. Can accept additional parameters as needed
+Custom filters MUST:
+1. Be defined in python modules within directories specified by `local_filters`
+2. Contain a `host` keyword as the first parameter
+3. Return a boolean value
+4. Include proper type annotations (for automatic discovery)
 
-Place these functions in your filters directory (default: filters) for NornFlow to discover them.
+**Example custom filter:**
 
-### Example: Combined Filtering Strategy
+```python
+from nornir.core.inventory import Host
 
+def in_region(host: Host, region: str) -> bool:
+    """Filter hosts by region.
+    
+    Args:
+        host: The Nornir host object to check
+        region: Region name to match
+        
+    Returns:
+        bool: True if host's region matches
+    """
+    return host.data.get("region") == region
+
+def has_capability(host: Host, capability: str, min_version: str = "1.0") -> bool:
+    """Filter hosts by capability and minimum version.
+    
+    Args:
+        host: The Nornir host object to check
+        capability: Capability name
+        min_version: Minimum version required (default: "1.0")
+        
+    Returns:
+        bool: True if host has capability with sufficient version
+    """
+    caps = host.data.get("capabilities", {})
+    if capability not in caps:
+        return False
+    
+    return caps[capability] >= min_version
+```
+
+Use in a workflow:
 ```yaml
 workflow:
-  name: "Core Switch Upgrade"
+  name: "Regional Update"
   inventory_filters:
-    groups: ["core_switches"]  # Applied first - selects only core switches
-    platform: "ios-xe"         # Applied second - narrows to IOS-XE devices
-    site_filter:               # Applied third - custom filter with parameters
-      region: "east"
-      priority: "high"
-    os_version_lt: "17.3.4"    # Applied fourth - custom filter for version comparison
-  tasks:
-    - name: backup_configs
-    - name: upgrade_os
+    in_region: "east"
+    has_capability:
+      capability: "bgp"
+      min_version: "4.0"
+  # ...
 ```
+
+## Hooks System
+
+### What are Hooks?
+
+Hooks are a task extension mechanism in NornFlow that allow you to modify task behavior without changing the task implementation itself. Hooks are configured at the task level in workflows and are completely optional.
+
+Hooks enable:
+- Conditional execution of tasks on specific hosts
+- Suppression of task output
+- Storage of task results as runtime variables
+- Extension of task behavior through custom implementations
+
+Under the hood, hooks are implemented as Nornir Processors and are orchestrated by the `NornFlowHookProcessor`, which manages hook registration and execution throughout the task lifecycle.
+
+### Built-in Hooks
+
+NornFlow provides three built-in hooks:
+
+**`if` Hook - Conditional Execution**
+
+Controls whether a task executes on specific hosts based on filter functions or Jinja2 expressions.
+
+```yaml
+tasks:
+  # Using filter function
+  - name: ios_specific_task
+    if:
+      platform: "ios"
+  
+  # Using Jinja2 expression
+  - name: conditional_backup
+    if: "{{ host.data.backup_enabled and environment == 'prod' }}"
+```
+
+**`set_to` Hook - Result Storage**
+
+Captures task execution results and stores them as runtime variables for use in subsequent tasks.
+
+```yaml
+tasks:
+  # Store complete result
+  - name: get_facts
+    set_to: device_facts
+  
+  # Extract specific data from result
+  - name: get_environment
+    set_to:
+      cpu_usage: "environment.cpu.0.%usage"
+      serial: "serial_number"
+  
+  # Use stored data in later tasks
+  - name: echo
+    args:
+      msg: "CPU: {{ cpu_usage }}%, Serial: {{ serial }}"
+```
+
+**`shush` Hook - Output Suppression**
+
+Suppresses task output printing while preserving result data for other hooks and processors.
+
+```yaml
+tasks:
+  # Static suppression
+  - name: noisy_task
+    shush: true
+    set_to: task_result  # Result still available
+  
+  # Dynamic suppression based on variables
+  - name: conditional_quiet
+    shush: "{{ debug_mode == false }}"
+```
+
+For comprehensive documentation on hooks, including creating custom hooks, see the Hooks Guide.
 
 ## Processors
 
+Processors are middleware components that extend Nornir's task execution to provide features like:
+- Variable substitution
+- Result formatting
+- Progress tracking
+- Logging and reporting
+- Failure handling
+- Hook orchestration
+
 ### What Processors Do
 
-Processors are hooks into Nornir's task execution lifecycle. They can:
-- Format task output
-- Log execution details
-- Collect metrics
-- Handle errors
-- Generate reports
+Processors can hook into different task execution events:
 
-### Processor Configuration
+- `task_started` - Called when a task begins globally
+- `task_completed` - Called when a task completes globally
+- `task_instance_started` - Called before a task runs on a specific host
+- `task_instance_completed` - Called after a task completes on a specific host
+- `subtask_instance_started` - Called before a subtask on a specific host
+- `subtask_instance_completed` - Called after a subtask on a specific host
+
+NornFlow provides built-in processors and allows custom ones:
 
 ```yaml
-# Global processors in nornflow.yaml
+# nornflow.yaml
 processors:
-  - class: "nornflow.builtins.DefaultNornFlowProcessor"  # Built-in (included)
-  - class: "mycompany.processors.AuditLogger"            # User-defined
+  - class: "nornflow.builtins.DefaultNornFlowProcessor"
+    args: {}
+  - class: "my_package.CustomProcessor"
     args:
-      log_file: "/var/log/nornflow/audit.log"
-      
-# Workflow-specific processors
-workflow:
-  processors:
-    - class: "nornflow.builtins.DefaultNornFlowProcessor"  # Built-in (included)
-    - class: "mycompany.processors.SlackNotifier"          # User-defined
-      args:
-        webhook_url: "{{ SLACK_WEBHOOK_URL }}"
+      option: "value"
 ```
 
-**Note:** Processors marked as "User-defined" are there for the sake of example and would have to be implemented by the developer.
+**Built-in Processors:**
+- `DefaultNornFlowProcessor`: Formats task output and tracks execution statistics
+- `NornFlowVariableProcessor`: Handles variable resolution (always applied first)
+- `NornFlowFailureStrategyProcessor`: Implements failure handling (always applied last)
+- `NornFlowHookProcessor`: Orchestrates hook execution (automatically added when hooks are present)
+
+The `NornFlowHookProcessor` manages a two-tier context system:
+- **Workflow context**: Set once during initialization (vars_manager, filters_catalog, etc.)
+- **Task-specific context**: Updated for each task (task_model, hooks for that task)
+
+This processor is responsible for registering hooks and delegating lifecycle events to the appropriate hook instances.
 
 ### Processor Precedence
 
-1. **CLI processors** (`--processors`) - Highest priority
-2. **Workflow processors** - Override global processors
-3. **Global processors** - From nornflow.yaml
-4. **Default processor** - If nothing else specified
+Processors are applied with this precedence (highest to lowest):
 
-**Important:** When you specify processors at any level, you must explicitly include `DefaultNornFlowProcessor` if you want its functionality.
+1. **CLI arguments** - Provided with `--processors` option
+2. **Workflow-specific** - Defined in the workflow YAML
+3. **Global settings** - Defined in nornflow.yaml
+4. **Default processor** - Used if none specified
+
+NornFlow includes two special processors that will ALWAYS be applied in this order:
+1. `NornFlowVariableProcessor` (always first)
+2. User-defined processors (in the exact order they are informed)
+3. `NornFlowFailureStrategyProcessor` (always last)
+
+> NOTE: The '*User-defined processors*' above may contain any number of processors, including (or not) the builtin `DefaultNornFlowProcessor`
 
 ## Execution Model
 
-Understanding NornFlow's execution model helps predict behavior:
+NornFlow's execution model follows these principles:
 
-1. **Sequential Task Execution**: Tasks run in order, one at a time
-2. **Parallel Host Execution**: Each task runs on all hosts in parallel
-3. **Isolated Variable Contexts**: Each host maintains its own variables
-4. **Result Aggregation**: Task results are collected before proceeding
+1. **Task Sequencing**
+   - Tasks run in the order defined in the workflow
+   - Each task completes on all hosts before the next begins
+   - Variables set by tasks are available to subsequent tasks
 
-```
-Task 1 → [Host A, Host B, Host C] (parallel)
-         ↓ (wait for all)
-Task 2 → [Host A, Host B, Host C] (parallel)
-         ↓ (wait for all)
-Task 3 → [Host A, Host B, Host C] (parallel)
-```
+2. **Parallel Host Execution**
+   - Within each task, execution happens in parallel across hosts
+   - Default concurrency is controlled by Nornir's `num_workers` setting
+
+3. **Variable Isolation**
+   - Each host has its own isolated variable context
+   - Variables from one host can't affect others
+   - Enables safe parallel execution
+
+4. **Failure Handling**
+   - Controlled by the configured failure strategy
+   - See the Failure Strategies guide for details
+
+## Failure Strategies (Summary)
+
+NornFlow supports three failure handling strategies:
+
+1. **skip-failed** (default)
+   - Failed hosts are removed from subsequent tasks
+   - Other hosts continue execution
+
+2. **fail-fast**
+   - Stops execution on first failure
+   - Prevents further changes when issues are detected
+
+3. **run-all**
+   - All tasks run on all hosts regardless of failures
+   - Useful for diagnostic or audit workflows
+
+See the full Failure Strategies guide for details.
 
 ## Best Practices
 
-1. **Keep Workflows Focused**: One workflow should accomplish one logical goal
-2. **Use Descriptive Names**: Both workflow and task names should be self-documenting
-3. **Leverage Variables**: Use variables for reusable values and templates
-4. **Test with Dry Run**: Always test workflows with `--dry-run` first
-5. **Version Control**: Keep workflows in version control with meaningful commits
-6. **Complex Logic in Python**: Write conditionals, loops, and complex logic in Python Nornir tasks rather than in YAML/Jinja2 to maintain readability and debuggability
-7. **Document Complex Logic**: Add comments in YAML for complex filtering or logic
-8. **Error Handling**: Use conditional logic to handle expected failures gracefully
+1. **Structure workflows by domain**
+   - Organize related workflows into domain folders
+   - Use domain variables for shared settings
+
+2. **Validate workflows before deployment**
+   - Use dry-run mode: `nornflow run workflow.yaml --dry-run`
+   - Review what NornFlow will do before making changes
+
+3. **Follow consistent naming conventions**
+   - Use descriptive names for tasks and workflows
+   - Group related variables with common prefixes
+
+4. **Use filtering effectively**
+   - Apply precise inventory filters
+   - Create custom filters for complex criteria
+
+5. **Document your workflows**
+   - Add descriptions to workflows
+   - Include comments for complex task sequences
+
+6. **Plan for failure**
+   - Choose appropriate failure strategies
+   - Implement verification tasks after changes
 
 <div align="center">
   
@@ -580,12 +825,12 @@ Task 3 → [Host A, Host B, Host C] (parallel)
 <table width="100%" border="0" style="border-collapse: collapse;">
 <tr>
 <td width="33%" align="left" style="border: none;">
-<a href="./quick_start.md">← Previous: Quick Start Guide</a>
+<a href="./quick_start.md">← Previous: Quick Start</a>
 </td>
 <td width="33%" align="center" style="border: none;">
 </td>
 <td width="33%" align="right" style="border: none;">
-<a href="./variables_basics.md">Next: Variables Basics →</a>
+<a href="./blueprints_guide.md">Next: Blueprints Guide →</a>
 </td>
 </tr>
 </table>
